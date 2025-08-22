@@ -1,30 +1,37 @@
+mod score;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::sprite::Anchor;
-use bevy::text::FontSmoothing;
-use bevy::window::WindowResized;
 use bevy::render::camera::ScalingMode;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::mesh::Indices;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 use rand::Rng;
+use bevy_dyn_fontsize::DynamicFontsizePlugin;
 
-use super::consts::*;
+use crate::common::*;
+use score::{Score, PlayerScored, MaxScoreReached, ClearScores};
 
 pub struct PongPlugin;
 
 impl Plugin for PongPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (setup_camera, setup_arena, setup_paddles, setup_ball))
-            .add_systems(Startup, setup_text_entities)
+        app.add_plugins(DynamicFontsizePlugin::default())
+            .add_systems(Startup, (setup_camera, setup_arena, setup_paddles, setup_ball))
+            .add_systems(Startup, score::setup.after(setup_camera))
             .add_systems(PostStartup, start_round_timer)
-            .add_systems(Update, (update_round_timer, handle_user_input))
-            .add_systems(Update, (handle_window_resize, handle_font_resize))
+            .add_systems(Update, (update_round_timer, handle_user_input, handle_game_end))
             .add_systems(Update, move_ball.after(handle_user_input))
             .add_systems(Update, detect_score.after(move_ball))
+            .add_systems(Update, score::handle_player_score.after(detect_score))
+            .add_systems(Update, score::clear_scores.after(update_round_timer))
             .insert_resource(RoundStartTimer::default())
-            .insert_resource(ResizeFontDebounce::default())
-            .insert_resource(Score {p1: 0, p2: 0});
+            .insert_resource(GameState::default())
+            .insert_resource(Score::default())
+            .add_event::<PlayerScored>()
+            .add_event::<MaxScoreReached>()
+            .add_event::<ClearScores>();
     }
 }
 
@@ -204,97 +211,6 @@ fn setup_ball(
     ));
 }
 
-#[derive(Component)]
-struct P1ScoreText;
-
-#[derive(Component)]
-struct P2ScoreText;
-
-#[derive(Component)]
-struct P1WinText;
-
-#[derive(Component)]
-struct P2WinText;
-
-#[derive(Component)]
-struct DynamicFontSize {
-    pct_win_height: f32,
-}
-
-fn setup_text_entities(mut commands: Commands, window: Single<&Window>) {
-
-    let score_y = ARENA_HEIGHT / 2f32;
-    let win_y = score_y - (SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT * 1.1f32);
-
-    commands.spawn((
-        P1ScoreText,
-        DynamicFontSize { pct_win_height: SCORE_FONT_SIZE_AS_SCREEN_PCT },
-        Text2d::new("0"),
-        TextFont {
-            font_size: SCORE_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            ..default()
-        },
-        Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(-ARENA_WIDTH / 4f32, score_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        P2ScoreText,
-        DynamicFontSize { pct_win_height: SCORE_FONT_SIZE_AS_SCREEN_PCT },
-        Text2d::new("0"),
-        TextFont {
-            font_size: SCORE_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            ..default()
-        },
-        Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(ARENA_WIDTH / 4f32, score_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        P1WinText,
-        DynamicFontSize { pct_win_height: WIN_FONT_SIZE_AS_SCREEN_PCT },
-        Text2d::new("Player 1 Wins!"),
-        TextFont {
-            font_size: WIN_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            font_smoothing: FontSmoothing::AntiAliased,
-            ..default()
-        },
-        Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(-ARENA_WIDTH / 4f32, win_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
-        Visibility::Hidden,
-    ));
-
-    commands.spawn((
-        P2WinText,
-        DynamicFontSize { pct_win_height: WIN_FONT_SIZE_AS_SCREEN_PCT },
-        Text2d::new("Player 2 Wins!"),
-        TextFont {
-            font_size: WIN_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            font_smoothing: FontSmoothing::AntiAliased,
-            ..default()
-        },
-        Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(ARENA_WIDTH / 4f32, win_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
-        Visibility::Hidden,
-    ));
-}
-
 fn handle_user_input(
     player1: Option<Single<&mut Transform, (With<Player1Paddle>, Without<Player2Paddle>)>>,
     player2: Option<Single<&mut Transform, (With<Player2Paddle>, Without<Player1Paddle>)>>,
@@ -334,6 +250,11 @@ fn handle_user_input(
 #[derive(Resource, Default)]
 struct RoundStartTimer(Timer);
 
+#[derive(Resource, Default)]
+struct GameState {
+    between_games: bool,
+}
+
 fn start_round_timer(mut round_timer: ResMut<RoundStartTimer>) {
     round_timer.0 = Timer::from_seconds(2f32, TimerMode::Once);
 }
@@ -341,24 +262,18 @@ fn start_round_timer(mut round_timer: ResMut<RoundStartTimer>) {
 fn update_round_timer(
     mut round_timer: ResMut<RoundStartTimer>,
     time: Res<Time>,
+    mut game_state: ResMut<GameState>,
     mut ball: Single<&mut Ball>,
-    mut scores: ResMut<Score>,
-    p1_score_txt: Single<&mut Text2d, (With<P1ScoreText>, Without<P2ScoreText>)>,
-    p2_score_txt: Single<&mut Text2d, (With<P2ScoreText>, Without<P1ScoreText>)>,
-    p1_win_txt: Single<&mut Visibility, (With<P1WinText>, Without<P2WinText>)>,
-    p2_win_txt: Single<&mut Visibility, (With<P2WinText>, Without<P1WinText>)>,
+    mut event_writer: EventWriter<ClearScores>,
 ) {
     round_timer.0.tick(time.delta());
 
     if round_timer.0.just_finished() {
 
         // Reset for new game if needed
-        if (scores.p1 >= WINNING_SCORE) || (scores.p2 >= WINNING_SCORE) {
-            *scores = Score { p1: 0, p2: 0 };
-            p1_score_txt.into_inner().0 = String::from("0");
-            p2_score_txt.into_inner().0 = String::from("0");
-            *p1_win_txt.into_inner() = Visibility::Hidden;
-            *p2_win_txt.into_inner() = Visibility::Hidden;
+        if game_state.between_games {
+            game_state.between_games = false;
+            event_writer.write(ClearScores);
         }
 
         // Generate a random starting angle (w/ 50% change of each direction)
@@ -500,20 +415,10 @@ fn move_ball(
     }
 }
 
-#[derive(Resource)]
-struct Score {
-    p1: u8,
-    p2: u8,
-}
-
 fn detect_score(
     ball_q: Single<(&mut Ball, &mut Transform)>,
     mut round_timer: ResMut<RoundStartTimer>,
-    mut scores: ResMut<Score>,
-    p1_score_txt: Single<&mut Text2d, (With<P1ScoreText>, Without<P2ScoreText>)>,
-    p2_score_txt: Single<&mut Text2d, (With<P2ScoreText>, Without<P1ScoreText>)>,
-    p1_win_txt: Single<&mut Visibility, (With<P1WinText>, Without<P2WinText>)>,
-    p2_win_txt: Single<&mut Visibility, (With<P2WinText>, Without<P1WinText>)>,
+    mut event_writer: EventWriter<PlayerScored>,
 ) {
     let (mut ball, mut ball_tf) = ball_q.into_inner();
 
@@ -522,60 +427,25 @@ fn detect_score(
     }
 
     if ball_tf.translation.x.abs() >= (ARENA_WIDTH / 2f32) {
-        // Ball has collided with wall! Check who scored...        
-        if ball_tf.translation.x.is_sign_positive() {
-            scores.p1 += 1;
-            p1_score_txt.into_inner().0 = scores.p1.to_string();
-        } else {
-            scores.p2 += 1;
-            p2_score_txt.into_inner().0 = scores.p2.to_string();
-        }
+        // Ball has collided with wall! Raise event about who scored...
+        event_writer.write(PlayerScored(
+            if ball_tf.translation.x.is_sign_positive() { Player1 } else { Player2 }
+        ));
 
         ball.paused = true;
         ball_tf.translation = Vec3::ZERO;
-    }
-
-    if (scores.p1 < WINNING_SCORE) && (scores.p2 < WINNING_SCORE) {
-        // No Winner Yet
         round_timer.0 = Timer::from_seconds(1f32, TimerMode::Once);
-    } else {
-        round_timer.0 = Timer::from_seconds(2f32, TimerMode::Once);
-        if scores.p1 > scores.p2 {
-            // Player 1 Wins
-            *p1_win_txt.into_inner() = Visibility::Visible;
-        } else {
-            // Player 2 Wins
-            *p2_win_txt.into_inner() = Visibility::Visible;
-        }
     }
 }
 
-#[derive(Resource, Default)]
-struct ResizeFontDebounce(Timer);
-
-fn handle_window_resize(
-    mut events: EventReader<WindowResized>,
-    mut font_timer: ResMut<ResizeFontDebounce>,
+fn handle_game_end(
+    mut events: EventReader<MaxScoreReached>,
+    mut round_timer: ResMut<RoundStartTimer>,
+    mut game_state: ResMut<GameState>,
 ) {
     if !events.is_empty() {
         events.clear();
-        font_timer.0 = Timer::from_seconds(FONT_RESIZE_DEBOUNCE_TIME, TimerMode::Once);
-    }
-}
-
-fn handle_font_resize(
-    time: Res<Time>,
-    mut font_timer: ResMut<ResizeFontDebounce>,
-    window: Single<&Window>,
-    fonts: Query<(&DynamicFontSize, &mut TextFont, &mut Transform)>,
-) {
-    //println!("{}", 1f32 / time.delta_secs());
-    font_timer.0.tick(time.delta());
-
-    if font_timer.0.just_finished() {
-        for (font_cfg, mut font, mut transform) in fonts {
-            font.font_size = font_cfg.pct_win_height * window.height();
-            transform.scale = Vec3::splat(ARENA_HEIGHT / window.height());
-        }
+        game_state.between_games = true;
+        round_timer.0 = Timer::from_seconds(5f32, TimerMode::Once);
     }
 }

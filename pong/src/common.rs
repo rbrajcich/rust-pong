@@ -36,5 +36,10 @@ pub const WIN_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.04;
 // Winning score
 pub const WINNING_SCORE: u8 = 10;
 
-// Font resizing
-pub const FONT_RESIZE_DEBOUNCE_TIME: f32 = 0.5; // seconds
+pub enum PlayerId {
+    Player1,
+    Player2,
+}
+
+pub use PlayerId::Player1;
+pub use PlayerId::Player2;

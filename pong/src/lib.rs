@@ -1,4 +1,4 @@
-mod consts;
+mod common;
 mod plugin;
 
 use bevy::app::PluginGroupBuilder;
@@ -6,7 +6,7 @@ use bevy::window::WindowResolution;
 use bevy::window::PresentMode;
 use bevy::prelude::*;
 
-use consts::*;
+use common::*;
 use plugin::PongPlugin;
 
 /// The PluginGroup which contains all plugins needed to run Pong,
