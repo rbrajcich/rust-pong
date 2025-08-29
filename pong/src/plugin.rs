@@ -8,30 +8,24 @@ use bevy::render::mesh::Indices;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 use rand::Rng;
-use bevy_dyn_fontsize::DynamicFontsizePlugin;
 
 use crate::common::*;
-use score::{Score, PlayerScored, MaxScoreReached, ClearScores};
+use score::{ScorePlugin, PlayerScored, MaxScoreReached, ClearScores};
 
 pub struct PongPlugin;
 
 impl Plugin for PongPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(DynamicFontsizePlugin::default())
-            .add_systems(Startup, (setup_camera, setup_arena, setup_paddles, setup_ball))
-            .add_systems(Startup, score::setup.after(setup_camera))
+        app.add_plugins(ScorePlugin)
+            .add_systems(Startup, setup_camera.before(score::Systems::Startup))
+            .add_systems(Startup, (setup_arena, setup_paddles, setup_ball))
             .add_systems(PostStartup, start_round_timer)
-            .add_systems(Update, (update_round_timer, handle_user_input, handle_game_end))
+            .add_systems(Update, (handle_user_input, handle_game_end))
             .add_systems(Update, move_ball.after(handle_user_input))
-            .add_systems(Update, detect_score.after(move_ball))
-            .add_systems(Update, score::handle_player_score.after(detect_score))
-            .add_systems(Update, score::clear_scores.after(update_round_timer))
+            .add_systems(Update, update_round_timer.before(score::Systems::Update))
+            .add_systems(Update, detect_score.after(move_ball).before(score::Systems::Update))
             .insert_resource(RoundStartTimer::default())
-            .insert_resource(GameState::default())
-            .insert_resource(Score::default())
-            .add_event::<PlayerScored>()
-            .add_event::<MaxScoreReached>()
-            .add_event::<ClearScores>();
+            .insert_resource(GameState::default());
     }
 }
 
@@ -446,6 +440,6 @@ fn handle_game_end(
     if !events.is_empty() {
         events.clear();
         game_state.between_games = true;
-        round_timer.0 = Timer::from_seconds(5f32, TimerMode::Once);
+        round_timer.0 = Timer::from_seconds(3f32, TimerMode::Once);
     }
 }

@@ -36,6 +36,7 @@ pub const WIN_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.04;
 // Winning score
 pub const WINNING_SCORE: u8 = 10;
 
+#[derive(PartialEq, Eq)]
 pub enum PlayerId {
     Player1,
     Player2,

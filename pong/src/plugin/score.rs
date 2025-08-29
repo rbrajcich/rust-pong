@@ -6,10 +6,20 @@ use bevy_dyn_fontsize::{DynamicFontsizePlugin, DynamicFontSize};
 
 use crate::common::*;
 
-#[derive(Resource, Default)]
-pub struct Score {
-    p1: u8,
-    p2: u8,
+pub struct ScorePlugin;
+
+impl Plugin for ScorePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(DynamicFontsizePlugin::default())
+            .insert_resource(Score::default())
+            .add_event::<PlayerScored>()
+            .add_event::<MaxScoreReached>()
+            .add_event::<ClearScores>()
+            .add_systems(Startup, setup.in_set(Systems::Startup))
+            .add_systems(Update,
+                (handle_player_score, clear_scores).in_set(Systems::Update)
+            );
+    }
 }
 
 #[derive(Event)]
@@ -21,7 +31,25 @@ pub struct MaxScoreReached;
 #[derive(Event)]
 pub struct ClearScores;
 
-pub fn setup(
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Systems {
+    Startup,
+    Update,
+}
+
+#[derive(Resource, Default)]
+struct Score {
+    p1: u8,
+    p2: u8,
+}
+
+#[derive(Component)]
+struct ScoreText(PlayerId);
+
+#[derive(Component)]
+struct WinText(PlayerId);
+
+fn setup(
     mut commands: Commands,
     window: Single<&Window>,
     camera_entity: Single<Entity, With<Camera2d>>,
@@ -31,7 +59,7 @@ pub fn setup(
     let win_y = score_y - (SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT * 1.1f32);
 
     commands.spawn((
-        P1ScoreText,
+        ScoreText(Player1),
         DynamicFontSize { 
             height_in_world: SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
             render_camera: camera_entity.entity(),
@@ -50,7 +78,7 @@ pub fn setup(
     ));
 
     commands.spawn((
-        P2ScoreText,
+        ScoreText(Player2),
         DynamicFontSize {
             height_in_world: SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
             render_camera: camera_entity.entity(),
@@ -69,7 +97,7 @@ pub fn setup(
     ));
 
     commands.spawn((
-        P1WinText,
+        WinText(Player1),
         DynamicFontSize {
             height_in_world: WIN_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
             render_camera: camera_entity.entity(),
@@ -90,7 +118,7 @@ pub fn setup(
     ));
 
     commands.spawn((
-        P2WinText,
+        WinText(Player2),
         DynamicFontSize {
             height_in_world: WIN_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
             render_camera: camera_entity.entity(),
@@ -111,15 +139,49 @@ pub fn setup(
     ));
 }
 
-pub fn handle_player_score(
+fn handle_player_score(
     mut events: EventReader<PlayerScored>,
     mut scores: ResMut<Score>,
-    mut p1_score_txt: Single<&mut Text2d, (With<P1ScoreText>, Without<P2ScoreText>)>,
-    mut p2_score_txt: Single<&mut Text2d, (With<P2ScoreText>, Without<P1ScoreText>)>,
-    mut p1_win_txt: Single<&mut Visibility, (With<P1WinText>, Without<P2WinText>)>,
-    mut p2_win_txt: Single<&mut Visibility, (With<P2WinText>, Without<P1WinText>)>,
+    mut score_texts: Query<(&mut Text2d, &ScoreText)>,
+    mut win_texts: Query<(&mut Visibility, &WinText)>,
     mut event_writer: EventWriter<MaxScoreReached>,
 ) {
+    let mut score_text_iter = score_texts.iter_mut();
+    let t1 = score_text_iter.next();
+    let t2 = score_text_iter.next();
+    assert!(score_text_iter.next().is_none(), "Expected 2 ScoreTexts. Got more");
+
+    let (p1_score_txt, p2_score_txt) = match (t1, t2) {
+        (Some(t1), Some(t2)) => {
+            if t1.1.0 == Player1 {
+                assert!(t2.1.0 == Player2, "Expected Player 2 ScoreText");
+                (t1.0.into_inner(), t2.0.into_inner())
+            } else {
+                assert!(t2.1.0 == Player1, "Expected Player 1 ScoreText");
+                (t2.0.into_inner(), t1.0.into_inner())
+            }
+        },
+        _ => panic!("Expected 2 ScoreTexts. Got less")
+    };
+
+    let mut win_text_iter = win_texts.iter_mut();
+    let t1 = win_text_iter.next();
+    let t2 = win_text_iter.next();
+    assert!(win_text_iter.next().is_none(), "Expected 2 WinTexts. Got more");
+
+    let (p1_win_txt, p2_win_txt) = match (t1, t2) {
+        (Some(t1), Some(t2)) => {
+            if t1.1.0 == Player1 {
+                assert!(t2.1.0 == Player2, "Expected Player 2 WinText");
+                (t1.0.into_inner(), t2.0.into_inner())
+            } else {
+                assert!(t2.1.0 == Player1, "Expected Player 1 WinText");
+                (t2.0.into_inner(), t1.0.into_inner())
+            }
+        },
+        _ => panic!("Expected 2 WinTexts. Got less")
+    };
+
     for PlayerScored(scorer) in events.read() {
         match scorer {
             Player1 => {
@@ -134,43 +196,33 @@ pub fn handle_player_score(
 
         if scores.p1 >= WINNING_SCORE {
             event_writer.write(MaxScoreReached);
-            *p1_win_txt.as_mut() = Visibility::Visible;
+            *p1_win_txt = Visibility::Visible;
             break;
         } else if scores.p2 >= WINNING_SCORE {
             event_writer.write(MaxScoreReached);
-            *p2_win_txt.as_mut() = Visibility::Visible;
+            *p2_win_txt = Visibility::Visible;
             break;
         }
     }
 }
 
-pub fn clear_scores(
+fn clear_scores(
     mut events: EventReader<ClearScores>,
     mut scores: ResMut<Score>,
-    p1_score_txt: Single<&mut Text2d, (With<P1ScoreText>, Without<P2ScoreText>)>,
-    p2_score_txt: Single<&mut Text2d, (With<P2ScoreText>, Without<P1ScoreText>)>,
-    p1_win_txt: Single<&mut Visibility, (With<P1WinText>, Without<P2WinText>)>,
-    p2_win_txt: Single<&mut Visibility, (With<P2WinText>, Without<P1WinText>)>,
+    score_texts: Query<&mut Text2d, With<ScoreText>>,
+    win_texts: Query<&mut Visibility, With<WinText>>,
 ) {
     if !events.is_empty() {
         events.clear();
 
         *scores = Score { p1: 0, p2: 0 };
-        p1_score_txt.into_inner().0 = String::from("0");
-        p2_score_txt.into_inner().0 = String::from("0");
-        *p1_win_txt.into_inner() = Visibility::Hidden;
-        *p2_win_txt.into_inner() = Visibility::Hidden;
+
+        for mut score_text in score_texts.into_iter() {
+            score_text.0 = String::from("0");
+        }
+
+        for mut win_text in win_texts.into_iter() {
+            *win_text = Visibility::Hidden;
+        }
     }
 }
-
-#[derive(Component)]
-pub struct P1ScoreText;
-
-#[derive(Component)]
-pub struct P2ScoreText;
-
-#[derive(Component)]
-pub struct P1WinText;
-
-#[derive(Component)]
-pub struct P2WinText;
