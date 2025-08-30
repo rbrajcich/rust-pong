@@ -1,11 +1,54 @@
+//!
+//! The pong score module contains the ScorePlugin, which keeps track of
+//! the game score, as well as managing the on-screen components that display
+//! info about the score and end of game results.
+//! 
+
+// -----------------------------------------------------------------------------
+// Included Symbols
+
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
-use bevy::text::FontSmoothing;
 
 use bevy_dyn_fontsize::{DynamicFontsizePlugin, DynamicFontSize};
 
 use crate::common::*;
 
+// -----------------------------------------------------------------------------
+// Constants
+
+const SCORE_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.2;
+const WIN_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.04;
+const PADDING_UNDER_SCORE_AS_SCREEN_PCT: f32 = 0.02;
+const WINNING_SCORE: u8 = 10;
+
+const P1_WIN_TEXT: &str = "Player 1 Wins!";
+const P2_WIN_TEXT: &str = "Player 2 Wins!";
+
+const SCORE_TEXT_Y: f32 = ARENA_HEIGHT / 2f32; // Top of arena in Y coords
+const SCORE_TEXT_HEIGHT: f32 = SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT;
+const SCORE_BOTTOM: f32 = SCORE_TEXT_Y - SCORE_TEXT_HEIGHT;
+const PADDING_UNDER_SCORE: f32 = PADDING_UNDER_SCORE_AS_SCREEN_PCT * ARENA_HEIGHT;
+const WIN_TEXT_Y: f32 = SCORE_BOTTOM - PADDING_UNDER_SCORE;
+const WIN_TEXT_HEIGHT: f32 = WIN_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT;
+const RIGHT_SIDE_CENTER_X: f32 = ARENA_WIDTH / 4f32;
+const LEFT_SIDE_CENTER_X: f32 = -RIGHT_SIDE_CENTER_X;
+
+// -----------------------------------------------------------------------------
+// Public API
+
+///
+/// This plugin adds all score keeping functionality to the game. Note that it
+/// does not detect score events on its own, or alter game state. It interacts
+/// with other game logic to handle such things by sending or receiving
+/// the events contained in this module.
+///
+/// This plugin will only work properly if the app contains a single Window
+/// and a single Camera2d entity.
+///
+/// To ensure necessary ordering constraints are maintained, see descriptions
+/// of below Events and SystemSets.
+///
 pub struct ScorePlugin;
 
 impl Plugin for ScorePlugin {
@@ -22,167 +65,181 @@ impl Plugin for ScorePlugin {
     }
 }
 
+///
+/// This event should be triggered by other code to notify the score module when
+/// a player score has been detected (including the scorer's PlayerId).
+///
 #[derive(Event)]
 pub struct PlayerScored(pub PlayerId);
 
+///
+/// This event will be triggered by the score module when a player has reached
+/// the winning score and displayed the results. Other game logic should listen
+/// for this event and move to an end-of-game state as well.
+///
 #[derive(Event)]
 pub struct MaxScoreReached;
 
+///
+/// This event should be triggered by other code to notify the score module when
+/// it should reset the scores to 0 and reflect this on-screen.
+///
 #[derive(Event)]
 pub struct ClearScores;
 
+///
+/// Contains the SystemSets relevant to external code using this plugin.
+/// These are exposed to enable proper ordering constraints in the game.
+/// Code using this plugin should ensure the requirements are met for each:
+///
+/// The single in-game Camera2d MUST be created in the startup state, BEFORE
+/// the Startup SystemSet here runs.
+/// 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Systems {
+
+    ///
+    /// The required single Camera2d Entity MUST be created in the startup phase
+    /// BEFORE this SystemSet is run.
+    ///
     Startup,
+
+    ///
+    /// Systems writing PlayerScored or ClearScores Events SHOULD occur in the
+    /// Update schedule BEFORE this SystemSet is run, to ensure score changes
+    /// are reflected in the same game loop iteration they are detected.
+    ///
     Update,
 }
 
+// -----------------------------------------------------------------------------
+// Private Resources
+
+// Resource to track the current score of each player
 #[derive(Resource, Default)]
 struct Score {
     p1: u8,
     p2: u8,
 }
 
+// -----------------------------------------------------------------------------
+// Private Components
+
+// Component for the ScoreText Entity of each player (on-screen score numbers)
 #[derive(Component)]
 struct ScoreText(PlayerId);
 
+// Component for the WinText Entity of each player ("Player X Won!")
 #[derive(Component)]
 struct WinText(PlayerId);
 
+// -----------------------------------------------------------------------------
+// Private Systems
+
+//
+// Setup system to spawn each of the 4 on-screen Entities managed by the score
+// module. Note that content and visibility of each may change, but they are
+// all spawned during startup and exist throughout the duration of the game.
+//
+// The first 2 Entities are ScoreText - one on each side of the screen
+// for each player. They each start at "0" and will count up each time the
+// associated player scores. They will always be visible.
+//
+// The other 2 Entities are WinText - one on each side of the screen for each
+// player. Each has appropriate text to announce when that player wins. The
+// text of these will never change, but they both start hidden and will only
+// be made visible once the associated player has won the game.
+//
 fn setup(
     mut commands: Commands,
-    window: Single<&Window>,
     camera_entity: Single<Entity, With<Camera2d>>,
 ) {
-
-    let score_y = ARENA_HEIGHT / 2f32;
-    let win_y = score_y - (SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT * 1.1f32);
-
     commands.spawn((
         ScoreText(Player1),
         DynamicFontSize { 
-            height_in_world: SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
+            height_in_world: SCORE_TEXT_HEIGHT,
             render_camera: camera_entity.entity(),
         },
         Text2d::new("0"),
-        TextFont {
-            font_size: SCORE_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            ..default()
-        },
         Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(-ARENA_WIDTH / 4f32, score_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
+        Transform::from_translation(
+            Vec3::new(LEFT_SIDE_CENTER_X, SCORE_TEXT_Y, Z_BEHIND_GAMEPLAY)
+        ),
     ));
 
     commands.spawn((
         ScoreText(Player2),
         DynamicFontSize {
-            height_in_world: SCORE_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
+            height_in_world: SCORE_TEXT_HEIGHT,
             render_camera: camera_entity.entity(),
         },
         Text2d::new("0"),
-        TextFont {
-            font_size: SCORE_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            ..default()
-        },
         Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(ARENA_WIDTH / 4f32, score_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
+        Transform::from_translation(
+            Vec3::new(RIGHT_SIDE_CENTER_X, SCORE_TEXT_Y, Z_BEHIND_GAMEPLAY)
+        ),
     ));
 
     commands.spawn((
         WinText(Player1),
         DynamicFontSize {
-            height_in_world: WIN_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
+            height_in_world: WIN_TEXT_HEIGHT,
             render_camera: camera_entity.entity(),
         },
-        Text2d::new("Player 1 Wins!"),
-        TextFont {
-            font_size: WIN_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            font_smoothing: FontSmoothing::AntiAliased,
-            ..default()
-        },
+        Text2d::new(P1_WIN_TEXT),
         Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(-ARENA_WIDTH / 4f32, win_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
+        Transform::from_translation(
+            Vec3::new(LEFT_SIDE_CENTER_X, WIN_TEXT_Y, Z_BEHIND_GAMEPLAY)
+        ),
         Visibility::Hidden,
     ));
 
     commands.spawn((
         WinText(Player2),
         DynamicFontSize {
-            height_in_world: WIN_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT,
+            height_in_world: WIN_TEXT_HEIGHT,
             render_camera: camera_entity.entity(),
         },
-        Text2d::new("Player 2 Wins!"),
-        TextFont {
-            font_size: WIN_FONT_SIZE_AS_SCREEN_PCT * window.height(),
-            font_smoothing: FontSmoothing::AntiAliased,
-            ..default()
-        },
+        Text2d::new(P2_WIN_TEXT),
         Anchor::TopCenter,
-        Transform {
-            translation: Vec3::new(ARENA_WIDTH / 4f32, win_y, -1f32),
-            scale: Vec3::splat(ARENA_HEIGHT / window.height()),
-            ..default()
-        },
+        Transform::from_translation(
+            Vec3::new(RIGHT_SIDE_CENTER_X, WIN_TEXT_Y, Z_BEHIND_GAMEPLAY)
+        ),
         Visibility::Hidden,
     ));
 }
 
+// 
+// System to handle events generated when a player has scored. This system
+// will update the score as needed (both internally and adjust entities).
+// It will also check after each score received whether or not a player has
+// won. If so, it will generate the MaxScoreReached event.
+//
 fn handle_player_score(
     mut events: EventReader<PlayerScored>,
-    mut scores: ResMut<Score>,
-    mut score_texts: Query<(&mut Text2d, &ScoreText)>,
-    mut win_texts: Query<(&mut Visibility, &WinText)>,
     mut event_writer: EventWriter<MaxScoreReached>,
+    mut scores: ResMut<Score>,
+    score_texts: Query<(&mut Text2d, &ScoreText)>,
+    win_texts: Query<(&mut Visibility, &WinText)>,
 ) {
-    let mut score_text_iter = score_texts.iter_mut();
-    let t1 = score_text_iter.next();
-    let t2 = score_text_iter.next();
-    assert!(score_text_iter.next().is_none(), "Expected 2 ScoreTexts. Got more");
 
-    let (p1_score_txt, p2_score_txt) = match (t1, t2) {
-        (Some(t1), Some(t2)) => {
-            if t1.1.0 == Player1 {
-                assert!(t2.1.0 == Player2, "Expected Player 2 ScoreText");
-                (t1.0.into_inner(), t2.0.into_inner())
-            } else {
-                assert!(t2.1.0 == Player1, "Expected Player 1 ScoreText");
-                (t2.0.into_inner(), t1.0.into_inner())
-            }
-        },
-        _ => panic!("Expected 2 ScoreTexts. Got less")
-    };
+    // Early return in case of no events
+    if events.is_empty() {
+        return;
+    }
 
-    let mut win_text_iter = win_texts.iter_mut();
-    let t1 = win_text_iter.next();
-    let t2 = win_text_iter.next();
-    assert!(win_text_iter.next().is_none(), "Expected 2 WinTexts. Got more");
+    let (p1_score_txt, p2_score_txt) = score_texts.into_iter()
+        .map(|(text2d, score_text)| (score_text.0, text2d.into_inner()))
+        .as_per_player();
 
-    let (p1_win_txt, p2_win_txt) = match (t1, t2) {
-        (Some(t1), Some(t2)) => {
-            if t1.1.0 == Player1 {
-                assert!(t2.1.0 == Player2, "Expected Player 2 WinText");
-                (t1.0.into_inner(), t2.0.into_inner())
-            } else {
-                assert!(t2.1.0 == Player1, "Expected Player 1 WinText");
-                (t2.0.into_inner(), t1.0.into_inner())
-            }
-        },
-        _ => panic!("Expected 2 WinTexts. Got less")
-    };
+    let (p1_win_txt, p2_win_txt) = win_texts.into_iter()
+        .map(|(vis, win_text)| (win_text.0, vis.into_inner()))
+        .as_per_player();
 
+    // Handle each score event (realistically only one will have happened)
     for PlayerScored(scorer) in events.read() {
+
+        // Add to score for applicable player
         match scorer {
             Player1 => {
                 scores.p1 += 1;
@@ -194,6 +251,7 @@ fn handle_player_score(
             },
         }
 
+        // Detect if either player has won
         if scores.p1 >= WINNING_SCORE {
             event_writer.write(MaxScoreReached);
             *p1_win_txt = Visibility::Visible;
@@ -206,6 +264,7 @@ fn handle_player_score(
     }
 }
 
+// System to clear scores back to 0 and return UI elements to original states
 fn clear_scores(
     mut events: EventReader<ClearScores>,
     mut scores: ResMut<Score>,

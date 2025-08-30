@@ -29,14 +29,10 @@ pub const BALL_SIZE_AS_SCREEN_HEIGHT_PCT: f32 = 0.02;
 // Speed parameters for ball
 pub const BALL_MOVE_SPEED: f32 = 0.9 * ARENA_WIDTH;
 
-// Sizing parameters for text
-pub const SCORE_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.2;
-pub const WIN_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.04;
+// Z-index value for secondary on-screen elements (to be behind balls/paddles)
+pub const Z_BEHIND_GAMEPLAY: f32 = -1f32;
 
-// Winning score
-pub const WINNING_SCORE: u8 = 10;
-
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum PlayerId {
     Player1,
     Player2,
@@ -44,3 +40,31 @@ pub enum PlayerId {
 
 pub use PlayerId::Player1;
 pub use PlayerId::Player2;
+
+pub trait AsPerPlayerData<T> {
+    fn as_per_player(self) -> (T, T);
+}
+
+impl<T, U> AsPerPlayerData<T> for U
+where
+    U: Iterator<Item = (PlayerId, T)>,
+{
+    fn as_per_player(mut self) -> (T, T) {
+        let item1 = self.next();
+        let item2 = self.next();
+        assert!(self.next().is_none(), "Expected 1 iterator entry for each player. Got more than 2.");
+
+        match (item1, item2) {
+            (Some(item1), Some(item2)) => {
+                if item1.0 == Player1 {
+                    assert!(item2.0 == Player2, "Expected 1 iterator entry for each player. Got 2 for Player 1");
+                    (item1.1, item2.1)
+                } else {
+                    assert!(item2.0 == Player1, "Expected 1 iterator entry for each player. Got 2 for Player 2");
+                    (item2.1, item1.1)
+                }
+            },
+            _ => panic!("Expected 1 iterator entry for each player. Got less than 2.")
+        }
+    }
+}
