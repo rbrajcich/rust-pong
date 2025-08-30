@@ -2,9 +2,9 @@ mod common;
 mod plugin;
 
 use bevy::app::PluginGroupBuilder;
-use bevy::window::WindowResolution;
-use bevy::window::PresentMode;
 use bevy::prelude::*;
+use bevy::window::PresentMode;
+use bevy::window::WindowResolution;
 
 use common::*;
 use plugin::PongPlugin;

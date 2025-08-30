@@ -2,7 +2,7 @@
 //! The pong score module contains the ScorePlugin, which keeps track of
 //! the game score, as well as managing the on-screen components that display
 //! info about the score and end of game results.
-//! 
+//!
 
 // -----------------------------------------------------------------------------
 // Included Symbols
@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
-use bevy_dyn_fontsize::{DynamicFontsizePlugin, DynamicFontSize};
+use bevy_dyn_fontsize::{DynamicFontSize, DynamicFontsizePlugin};
 
 use crate::common::*;
 
@@ -59,8 +59,9 @@ impl Plugin for ScorePlugin {
             .add_event::<MaxScoreReached>()
             .add_event::<ClearScores>()
             .add_systems(Startup, setup.in_set(Systems::Startup))
-            .add_systems(Update,
-                (handle_player_score, clear_scores).in_set(Systems::Update)
+            .add_systems(
+                Update,
+                (handle_player_score, clear_scores).in_set(Systems::Update),
             );
     }
 }
@@ -94,10 +95,9 @@ pub struct ClearScores;
 ///
 /// The single in-game Camera2d MUST be created in the startup state, BEFORE
 /// the Startup SystemSet here runs.
-/// 
+///
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Systems {
-
     ///
     /// The required single Camera2d Entity MUST be created in the startup phase
     /// BEFORE this SystemSet is run.
@@ -150,21 +150,20 @@ struct WinText(PlayerId);
 // text of these will never change, but they both start hidden and will only
 // be made visible once the associated player has won the game.
 //
-fn setup(
-    mut commands: Commands,
-    camera_entity: Single<Entity, With<Camera2d>>,
-) {
+fn setup(mut commands: Commands, camera_entity: Single<Entity, With<Camera2d>>) {
     commands.spawn((
         ScoreText(Player1),
-        DynamicFontSize { 
+        DynamicFontSize {
             height_in_world: SCORE_TEXT_HEIGHT,
             render_camera: camera_entity.entity(),
         },
         Text2d::new("0"),
         Anchor::TopCenter,
-        Transform::from_translation(
-            Vec3::new(LEFT_SIDE_CENTER_X, SCORE_TEXT_Y, Z_BEHIND_GAMEPLAY)
-        ),
+        Transform::from_translation(Vec3::new(
+            LEFT_SIDE_CENTER_X,
+            SCORE_TEXT_Y,
+            Z_BEHIND_GAMEPLAY,
+        )),
     ));
 
     commands.spawn((
@@ -175,9 +174,11 @@ fn setup(
         },
         Text2d::new("0"),
         Anchor::TopCenter,
-        Transform::from_translation(
-            Vec3::new(RIGHT_SIDE_CENTER_X, SCORE_TEXT_Y, Z_BEHIND_GAMEPLAY)
-        ),
+        Transform::from_translation(Vec3::new(
+            RIGHT_SIDE_CENTER_X,
+            SCORE_TEXT_Y,
+            Z_BEHIND_GAMEPLAY,
+        )),
     ));
 
     commands.spawn((
@@ -188,9 +189,7 @@ fn setup(
         },
         Text2d::new(P1_WIN_TEXT),
         Anchor::TopCenter,
-        Transform::from_translation(
-            Vec3::new(LEFT_SIDE_CENTER_X, WIN_TEXT_Y, Z_BEHIND_GAMEPLAY)
-        ),
+        Transform::from_translation(Vec3::new(LEFT_SIDE_CENTER_X, WIN_TEXT_Y, Z_BEHIND_GAMEPLAY)),
         Visibility::Hidden,
     ));
 
@@ -202,14 +201,16 @@ fn setup(
         },
         Text2d::new(P2_WIN_TEXT),
         Anchor::TopCenter,
-        Transform::from_translation(
-            Vec3::new(RIGHT_SIDE_CENTER_X, WIN_TEXT_Y, Z_BEHIND_GAMEPLAY)
-        ),
+        Transform::from_translation(Vec3::new(
+            RIGHT_SIDE_CENTER_X,
+            WIN_TEXT_Y,
+            Z_BEHIND_GAMEPLAY,
+        )),
         Visibility::Hidden,
     ));
 }
 
-// 
+//
 // System to handle events generated when a player has scored. This system
 // will update the score as needed (both internally and adjust entities).
 // It will also check after each score received whether or not a player has
@@ -222,33 +223,33 @@ fn handle_player_score(
     score_texts: Query<(&mut Text2d, &ScoreText)>,
     win_texts: Query<(&mut Visibility, &WinText)>,
 ) {
-
     // Early return in case of no events
     if events.is_empty() {
         return;
     }
 
-    let (p1_score_txt, p2_score_txt) = score_texts.into_iter()
+    let (p1_score_txt, p2_score_txt) = score_texts
+        .into_iter()
         .map(|(text2d, score_text)| (score_text.0, text2d.into_inner()))
         .as_per_player();
 
-    let (p1_win_txt, p2_win_txt) = win_texts.into_iter()
+    let (p1_win_txt, p2_win_txt) = win_texts
+        .into_iter()
         .map(|(vis, win_text)| (win_text.0, vis.into_inner()))
         .as_per_player();
 
     // Handle each score event (realistically only one will have happened)
     for PlayerScored(scorer) in events.read() {
-
         // Add to score for applicable player
         match scorer {
             Player1 => {
                 scores.p1 += 1;
                 p1_score_txt.0 = scores.p1.to_string();
-            },
+            }
             Player2 => {
                 scores.p2 += 1;
                 p2_score_txt.0 = scores.p2.to_string();
-            },
+            }
         }
 
         // Detect if either player has won

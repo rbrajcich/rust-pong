@@ -79,7 +79,7 @@ fn handle_font_resize(
         let cam_height = projection.area.height();
         let win_height = window.height();
 
-        if (cam_height > 0f32)  && (win_height > 0f32) {
+        if (cam_height > 0f32) && (win_height > 0f32) {
             font.font_size = (font_cfg.height_in_world / cam_height) * win_height;
             transform.scale = Vec3::splat(cam_height / win_height);
         }

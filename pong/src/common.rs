@@ -52,19 +52,28 @@ where
     fn as_per_player(mut self) -> (T, T) {
         let item1 = self.next();
         let item2 = self.next();
-        assert!(self.next().is_none(), "Expected 1 iterator entry for each player. Got more than 2.");
+        assert!(
+            self.next().is_none(),
+            "Expected 1 iterator entry for each player. Got more than 2."
+        );
 
         match (item1, item2) {
             (Some(item1), Some(item2)) => {
                 if item1.0 == Player1 {
-                    assert!(item2.0 == Player2, "Expected 1 iterator entry for each player. Got 2 for Player 1");
+                    assert!(
+                        item2.0 == Player2,
+                        "Expected 1 iterator entry for each player. Got 2 for Player 1"
+                    );
                     (item1.1, item2.1)
                 } else {
-                    assert!(item2.0 == Player1, "Expected 1 iterator entry for each player. Got 2 for Player 2");
+                    assert!(
+                        item2.0 == Player1,
+                        "Expected 1 iterator entry for each player. Got 2 for Player 2"
+                    );
                     (item2.1, item1.1)
                 }
-            },
-            _ => panic!("Expected 1 iterator entry for each player. Got less than 2.")
+            }
+            _ => panic!("Expected 1 iterator entry for each player. Got less than 2."),
         }
     }
 }
