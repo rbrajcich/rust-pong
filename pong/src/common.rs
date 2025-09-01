@@ -32,7 +32,7 @@ pub const BALL_MOVE_SPEED: f32 = 0.9 * ARENA_WIDTH;
 // Z-index value for secondary on-screen elements (to be behind balls/paddles)
 pub const Z_BEHIND_GAMEPLAY: f32 = -1f32;
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PlayerId {
     Player1,
     Player2,

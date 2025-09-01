@@ -4,7 +4,7 @@
 //! info about the score and end of game results.
 //!
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // Included Symbols
 
 use bevy::prelude::*;
@@ -14,7 +14,7 @@ use bevy_dyn_fontsize::{DynamicFontSize, DynamicFontsizePlugin};
 
 use crate::common::*;
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // Constants
 
 const SCORE_FONT_SIZE_AS_SCREEN_PCT: f32 = 0.2;
@@ -34,7 +34,7 @@ const WIN_TEXT_HEIGHT: f32 = WIN_FONT_SIZE_AS_SCREEN_PCT * ARENA_HEIGHT;
 const RIGHT_SIDE_CENTER_X: f32 = ARENA_WIDTH / 4f32;
 const LEFT_SIDE_CENTER_X: f32 = -RIGHT_SIDE_CENTER_X;
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // Public API
 
 ///
@@ -112,17 +112,17 @@ pub enum Systems {
     Update,
 }
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // Private Resources
 
 // Resource to track the current score of each player
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Debug, PartialEq, Eq)]
 struct Score {
     p1: u8,
     p2: u8,
 }
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // Private Components
 
 // Component for the ScoreText Entity of each player (on-screen score numbers)
@@ -133,7 +133,7 @@ struct ScoreText(PlayerId);
 #[derive(Component)]
 struct WinText(PlayerId);
 
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 // Private Systems
 
 //
@@ -283,6 +283,562 @@ fn clear_scores(
 
         for mut win_text in win_texts.into_iter() {
             *win_text = Visibility::Hidden;
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Unit Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::schedule::ScheduleBuildError;
+
+    #[test]
+    fn test_plugin_build() {
+        let mut app = App::new();
+        app.add_plugins(ScorePlugin);
+
+        // Validate expected plugins made it into the app
+        assert!(
+            app.is_plugin_added::<ScorePlugin>(),
+            "Expected ScorePlugin to be added"
+        );
+        assert!(
+            app.is_plugin_added::<DynamicFontsizePlugin>(),
+            "Expected DynamicFontsizePlugin to be added by ScorePlugin"
+        );
+
+        // Validate resources (including events) were added to the world
+        let world = app.world();
+        assert!(
+            world.is_resource_added::<Score>(),
+            "Expected Score resource to be added by ScorePlugin"
+        );
+        assert!(
+            world.is_resource_added::<Events<PlayerScored>>(),
+            "Expected PlayerScored event to be added by ScorePlugin"
+        );
+        assert!(
+            world.is_resource_added::<Events<MaxScoreReached>>(),
+            "Expected MaxScoreReached event to be added by ScorePlugin"
+        );
+        assert!(
+            world.is_resource_added::<Events<ClearScores>>(),
+            "Expected ClearScores event to be added by ScorePlugin"
+        );
+
+        // Validate systems were added to Startup schedule as intended
+        let mut exp_startup_systems = [(core::any::type_name_of_val(&setup), false)];
+        app.get_schedule(Startup)
+            .expect("Expected Startup schedule to exist in app")
+            .graph()
+            .systems()
+            .for_each(|(_, boxed_sys, _)| {
+                for exp_sys in exp_startup_systems.iter_mut() {
+                    if boxed_sys.name() == exp_sys.0 {
+                        assert!(
+                            !exp_sys.1,
+                            "Expected to find {} only once in Startup, but found twice",
+                            exp_sys.0,
+                        );
+                        exp_sys.1 = true;
+                        return;
+                    }
+                }
+            });
+        for exp_sys in exp_startup_systems {
+            assert!(
+                exp_sys.1,
+                "Expected to find {} in Startup schedule, but it was missing",
+                exp_sys.0,
+            );
+        }
+
+        // Validate systems were added to Update schedule as intended
+        let mut exp_update_systems = [
+            (core::any::type_name_of_val(&handle_player_score), false),
+            (core::any::type_name_of_val(&clear_scores), false),
+        ];
+        app.get_schedule(Update)
+            .expect("Expected Update schedule to exist in app")
+            .graph()
+            .systems()
+            .for_each(|(_, boxed_sys, _)| {
+                for exp_sys in exp_update_systems.iter_mut() {
+                    if boxed_sys.name() == exp_sys.0 {
+                        assert!(
+                            !exp_sys.1,
+                            "Expected to find {} only once in Update, but found twice",
+                            exp_sys.0,
+                        );
+                        exp_sys.1 = true;
+                        return;
+                    }
+                }
+            });
+        for exp_sys in exp_update_systems {
+            assert!(
+                exp_sys.1,
+                "Expected to find {} in Update schedule, but it was missing",
+                exp_sys.0,
+            );
+        }
+    }
+
+    #[test]
+    fn test_sys_ordering_setup() {
+        let mut app = App::new();
+        app.add_plugins(ScorePlugin);
+
+        // This ordering will lead to an error (which we expect) if the system
+        // is in the system set as it should be.
+        app.configure_sets(Startup, Systems::Startup.before(setup));
+        let init_result = app
+            .world_mut()
+            .try_schedule_scope(Startup, |world, sched| sched.initialize(world))
+            .expect("Expected Startup schedule to exist in app");
+        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
+            panic!(concat!(
+                "Expected Startup schedule build to fail, ",
+                "since 'setup' should be in Startup system set. But it succeeded"
+            ));
+        };
+    }
+
+    #[test]
+    fn test_sys_ordering_handle_player_score() {
+        let mut app = App::new();
+        app.add_plugins(ScorePlugin);
+
+        // This ordering will lead to an error (which we expect) if the system
+        // is in the system set as it should be.
+        app.configure_sets(Update, Systems::Update.before(handle_player_score));
+        let init_result = app
+            .world_mut()
+            .try_schedule_scope(Update, |world, sched| sched.initialize(world))
+            .expect("Expected Update schedule to exist in app");
+        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
+            panic!(concat!(
+                "Expected Update schedule build to fail, ",
+                "since 'handle_player_score' should be in Update system set. But it succeeded"
+            ));
+        };
+    }
+
+    #[test]
+    fn test_sys_ordering_clear_scores() {
+        let mut app = App::new();
+        app.add_plugins(ScorePlugin);
+
+        // This ordering will lead to an error (which we expect) if the system
+        // is in the system set as it should be.
+        app.configure_sets(Update, Systems::Update.before(clear_scores));
+        let init_result = app
+            .world_mut()
+            .try_schedule_scope(Update, |world, sched| sched.initialize(world))
+            .expect("Expected Update schedule to exist in app");
+        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
+            panic!(concat!(
+                "Expected Update schedule build to fail, ",
+                "since 'clear_scores' should be in Update system set. But it succeeded"
+            ));
+        };
+    }
+
+    #[test]
+    fn test_event_cleanup() {
+        let mut app = App::new();
+        let world = app.add_plugins(ScorePlugin).world_mut();
+
+        world.send_event(PlayerScored(Player1));
+        world.send_event(MaxScoreReached);
+        world.send_event(ClearScores);
+
+        // One game loop should not wipe out event (due to double buffering)
+        world.run_schedule(First);
+        assert!(
+            !world
+                .get_resource::<Events<PlayerScored>>()
+                .expect("Expected to find Events resource for PlayerScored")
+                .is_empty(),
+            "Expected PlayerScored event to still exist after one game loop",
+        );
+        assert!(
+            !world
+                .get_resource::<Events<MaxScoreReached>>()
+                .expect("Expected to find Events resource for MaxScoreReached")
+                .is_empty(),
+            "Expected MaxScoreReached event to still exist after one game loop",
+        );
+        assert!(
+            !world
+                .get_resource::<Events<ClearScores>>()
+                .expect("Expected to find Events resource for ClearScores")
+                .is_empty(),
+            "Expected ClearScores event to still exist after one game loop",
+        );
+
+        // After second game loop, events should be cleaned up automatically
+        world.run_schedule(First);
+        assert!(
+            world
+                .get_resource::<Events<PlayerScored>>()
+                .expect("Expected to find Events resource for PlayerScored")
+                .is_empty(),
+            "Expected PlayerScored event to be cleared after two game loops",
+        );
+        assert!(
+            world
+                .get_resource::<Events<MaxScoreReached>>()
+                .expect("Expected to find Events resource for MaxScoreReached")
+                .is_empty(),
+            "Expected MaxScoreReached event to be cleared after two game loops",
+        );
+        assert!(
+            world
+                .get_resource::<Events<ClearScores>>()
+                .expect("Expected to find Events resource for ClearScores")
+                .is_empty(),
+            "Expected ClearScores event to be cleared after two game loops",
+        );
+    }
+
+    #[test]
+    fn test_setup_system() {
+        let mut world = World::default();
+
+        // Set up a system to create the Camera2d we'll need, plus the setup system itself
+        let cam_create_sys =
+            world.register_system(|mut commands: Commands| commands.spawn(Camera2d).id());
+        let setup_sys = world.register_system(setup);
+
+        // Run the systems
+        let cam_entity = world.run_system(cam_create_sys).unwrap();
+        world
+            .run_system(setup_sys)
+            .expect("Expected setup system to run successfully");
+
+        // Get the ScoreText entities created by the setup system
+        let mut query = world.query::<(&ScoreText, &DynamicFontSize, &Text2d)>();
+        let mut query_iter = query.iter(&world);
+        let first = query_iter
+            .next()
+            .expect("Expected to get 2 ScoreTexts from setup. Got none");
+        let second = query_iter
+            .next()
+            .expect("Expected to get 2 ScoreTexts from setup. Got 1");
+        assert!(
+            query_iter.next().is_none(),
+            "Expected to get 2 ScoreTexts from setup. Got more"
+        );
+
+        // Assert a few key items on each to validate proper creation
+        assert_ne!(
+            first.0.0, second.0.0,
+            "Expected ScoreTexts to have unique PlayerId's"
+        );
+        for (_, dyn_font, text2d) in [first, second] {
+            assert_eq!(
+                dyn_font.render_camera, cam_entity,
+                "Expected ScoreText to use Camera2d as render_camera entity"
+            );
+            assert_eq!(
+                text2d.0, "0",
+                "Expected ScoreTexts to start with '0' as text value"
+            );
+        }
+
+        // Get the WinText entities created by the setup system
+        let mut query = world.query::<(&WinText, &DynamicFontSize, &Visibility)>();
+        let mut query_iter = query.iter(&world);
+        let first = query_iter
+            .next()
+            .expect("Expected to get 2 WinTexts from setup. Got none");
+        let second = query_iter
+            .next()
+            .expect("Expected to get 2 WinTexts from setup. Got 1");
+        assert!(
+            query_iter.next().is_none(),
+            "Expected to get 2 WinTexts from setup. Got more"
+        );
+
+        // Assert a few key items on each to validate proper creation
+        assert_ne!(
+            first.0.0, second.0.0,
+            "Expected WinTexts to have unique PlayerId's"
+        );
+        for (_, dyn_font, vis) in [first, second] {
+            assert_eq!(
+                dyn_font.render_camera, cam_entity,
+                "Expected WinText to use Camera2d as render_camera entity"
+            );
+            assert_eq!(
+                vis,
+                Visibility::Hidden,
+                "Expected WinTexts to start as hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_player_score_system() {
+        // Create world with necessary resources
+        let mut world = World::default();
+        world.init_resource::<Events<PlayerScored>>();
+        world.init_resource::<Events<MaxScoreReached>>();
+        world.init_resource::<Score>();
+
+        // Systems we'll need for this test
+        let cam_create_sys = world.register_system(
+            // Create a camera (for setup sys)
+            |mut commands: Commands| {
+                commands.spawn(Camera2d);
+            },
+        );
+        let setup_sys = world.register_system(setup); // Setup text entities in the world
+        let score_sys = world.register_system(handle_player_score);
+
+        // Prime the world by running our setup systems
+        world.run_system(cam_create_sys).unwrap();
+        world.run_system(setup_sys).unwrap();
+
+        // Run system the first time with no event. Expect no change
+        world.run_system(score_sys).unwrap();
+        validate_scores(
+            &mut world,
+            0,
+            0,
+            "0",
+            "0",
+            false,
+            false,
+            "after run with no score events",
+        );
+        assert!(
+            world
+                .get_resource::<Events<MaxScoreReached>>()
+                .unwrap()
+                .is_empty(),
+            "Expected 0 MaxScoreReached events after run with no score events",
+        );
+
+        // Run system again with a p1 score event. Expect p1 score increment
+        world.send_event(PlayerScored(Player1));
+        world.run_system(score_sys).unwrap();
+        validate_scores(
+            &mut world,
+            1,
+            0,
+            "1",
+            "0",
+            false,
+            false,
+            "after run with p1 score event",
+        );
+        assert!(
+            world
+                .get_resource::<Events<MaxScoreReached>>()
+                .unwrap()
+                .is_empty(),
+            "Expected 0 MaxScoreReached events after run with p1 score event",
+        );
+
+        // Run system again with a p2 score event. Expect p2 score increment
+        world.send_event(PlayerScored(Player2));
+        world.run_system(score_sys).unwrap();
+        validate_scores(
+            &mut world,
+            1,
+            1,
+            "1",
+            "1",
+            false,
+            false,
+            "after run with p2 score event",
+        );
+        assert!(
+            world
+                .get_resource::<Events<MaxScoreReached>>()
+                .unwrap()
+                .is_empty(),
+            "Expected 0 MaxScoreReached events after run with p2 score event",
+        );
+
+        // Prime ourselves for a victory on next score, then simulate p1 win
+        *world.get_resource_mut::<Score>().unwrap() = Score { p1: 9, p2: 9 };
+        world
+            .query::<(&ScoreText, &mut Text2d)>()
+            .iter_mut(&mut world)
+            .for_each(
+                |(_, txt)| txt.into_inner().0 = "9".into(), // Prime ScoreTexts
+            );
+        world.send_event(PlayerScored(Player1));
+        world.run_system(score_sys).unwrap();
+        validate_scores(
+            &mut world,
+            10,
+            9,
+            "10",
+            "9",
+            true,
+            false,
+            "after run with p1 winning",
+        );
+        assert_eq!(
+            world
+                .get_resource::<Events<MaxScoreReached>>()
+                .unwrap()
+                .len(),
+            1,
+            "Expected 1 MaxScoreReached event after run with p1 winning",
+        );
+        world
+            .get_resource_mut::<Events<MaxScoreReached>>()
+            .unwrap()
+            .clear(); // Clear for next test
+
+        // Prime ourselves for a victory on next score, then simulate p2 win
+        *world.get_resource_mut::<Score>().unwrap() = Score { p1: 9, p2: 9 };
+        world
+            .query_filtered::<&mut Text2d, With<ScoreText>>()
+            .iter_mut(&mut world)
+            .for_each(
+                |txt| txt.into_inner().0 = "9".into(), // Prime ScoreTexts
+            );
+        world
+            .query_filtered::<&mut Visibility, With<WinText>>()
+            .iter_mut(&mut world)
+            .for_each(
+                |vis| *vis.into_inner() = Visibility::Hidden, // Prime WinTexts
+            );
+        world.send_event(PlayerScored(Player2));
+        world.run_system(score_sys).unwrap();
+        validate_scores(
+            &mut world,
+            9,
+            10,
+            "9",
+            "10",
+            false,
+            true,
+            "after run with p2 winning",
+        );
+        assert_eq!(
+            world
+                .get_resource::<Events<MaxScoreReached>>()
+                .unwrap()
+                .len(),
+            1,
+            "Expected 1 MaxScoreReached event after run with p2 winning",
+        );
+    }
+
+    #[test]
+    fn test_clear_scores_system() {
+        // Create world with necessary resources
+        let mut world = World::default();
+        world.init_resource::<Events<ClearScores>>();
+        world.init_resource::<Score>();
+
+        // Systems we'll need for this test
+        let cam_create_sys = world.register_system(
+            // Create a camera (for setup sys)
+            |mut commands: Commands| {
+                commands.spawn(Camera2d);
+            },
+        );
+        let setup_sys = world.register_system(setup); // Setup text entities in the world
+        let clear_sys = world.register_system(clear_scores);
+
+        // Prime the world by running our setup systems
+        world.run_system(cam_create_sys).unwrap();
+        world.run_system(setup_sys).unwrap();
+
+        // Start by setting everything to a "non-cleared" state
+        *world.get_resource_mut::<Score>().unwrap() = Score { p1: 10, p2: 10 };
+        world
+            .query_filtered::<&mut Text2d, With<ScoreText>>()
+            .iter_mut(&mut world)
+            .for_each(
+                |txt| txt.into_inner().0 = "10".into(), // Prime ScoreTexts
+            );
+        world
+            .query_filtered::<&mut Visibility, With<WinText>>()
+            .iter_mut(&mut world)
+            .for_each(
+                |vis| *vis.into_inner() = Visibility::Visible, // Prime WinTexts
+            );
+
+        // Now run the clear system without any event input. Nothing should happen
+        world.run_system(clear_sys).unwrap();
+        validate_scores(
+            &mut world,
+            10,
+            10,
+            "10",
+            "10",
+            true,
+            true,
+            "after no clear events",
+        );
+
+        // And now send the event and confirm everything is wiped out
+        world.send_event(ClearScores);
+        world.run_system(clear_sys).unwrap();
+        validate_scores(
+            &mut world,
+            0,
+            0,
+            "0",
+            "0",
+            false,
+            false,
+            "after sending clear event",
+        );
+    }
+
+    // Helper function to validate score-keeping state in the world
+    fn validate_scores(
+        world: &mut World,
+        p1: u8,
+        p2: u8,
+        p1_text: &str,
+        p2_text: &str,
+        p1_win: bool,
+        p2_win: bool,
+        log: &str,
+    ) {
+        assert_eq!(
+            *world.get_resource::<Score>().unwrap(),
+            Score { p1, p2 },
+            "Expected score to be {}-{} {}",
+            p1,
+            p2,
+            log,
+        );
+
+        // Get the ScoreText entities created by the setup system
+        let mut query = world.query::<(&ScoreText, &Text2d)>();
+        for (&ScoreText(id), Text2d(txt)) in query.iter(world) {
+            let exp_val = if id == Player1 { p1_text } else { p2_text };
+            assert_eq!(txt, exp_val, "Expected {id:?} score text '{exp_val}' {log}");
+        }
+
+        // Get the WinText entities created by the setup system
+        let mut query = world.query::<(&WinText, &Visibility)>();
+        for (&WinText(id), vis) in query.iter(world) {
+            let exp_val = if id == Player1 { p1_win } else { p2_win };
+            let exp_val = if exp_val {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+            assert_eq!(
+                vis, exp_val,
+                "Expected {id:?} visibility '{exp_val:?}' {log}"
+            );
         }
     }
 }
