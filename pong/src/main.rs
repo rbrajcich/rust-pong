@@ -1,7 +1,7 @@
 use bevy::prelude::App;
 
-use pong::PongPlugins;
+use pong::PongPlugin;
 
 fn main() {
-    App::new().add_plugins(PongPlugins).run();
+    App::new().add_plugins(PongPlugin).run();
 }
