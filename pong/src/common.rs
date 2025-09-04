@@ -15,10 +15,6 @@ pub const MAX_WINDOW_HEIGHT: f32 = 4320.0;
 pub const INITIAL_WINDOW_WIDTH: f32 = 1600.0;
 pub const INITIAL_WINDOW_HEIGHT: f32 = 900.0;
 
-// Sizing parameters for midline dashes
-pub const MIDLINE_DASH_WIDTH: f32 = 0.005 * ARENA_WIDTH;
-pub const MIDLINE_DASH_HEIGHT: f32 = 0.055 * ARENA_HEIGHT;
-
 // Sizing parameters for paddles
 pub const PADDLE_HEIGHT_AS_SCREEN_PCT: f32 = 0.15;
 pub const PADDLE_ASPECT_RATIO: f32 = 0.15;
@@ -29,7 +25,8 @@ pub const BALL_SIZE_AS_SCREEN_HEIGHT_PCT: f32 = 0.02;
 // Speed parameters for ball
 pub const BALL_MOVE_SPEED: f32 = 0.9 * ARENA_WIDTH;
 
-// Z-index value for secondary on-screen elements (to be behind balls/paddles)
+// Z-index values for various components
+pub const Z_BACKGROUND: f32 = -2f32;
 pub const Z_BEHIND_GAMEPLAY: f32 = -1f32;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

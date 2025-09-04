@@ -799,7 +799,8 @@ mod tests {
         );
     }
 
-    // Helper function to validate score-keeping state in the world
+    // --- Helper Functions ---
+
     fn validate_scores(
         world: &mut World,
         p1: u8,

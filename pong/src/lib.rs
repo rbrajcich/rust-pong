@@ -1,143 +1,53 @@
+mod arena;
 mod common;
 mod score;
 
-use bevy::asset::RenderAssetUsages;
 use bevy::sprite::Anchor;
-use bevy::render::camera::ScalingMode;
-use bevy::render::mesh::PrimitiveTopology;
-use bevy::render::mesh::Indices;
 use bevy::window::PresentMode;
 use bevy::window::WindowResolution;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 use rand::Rng;
 
-use crate::common::*;
+use common::*;
+use arena::ArenaPlugin;
 use score::{ScorePlugin, PlayerScored, MaxScoreReached, ClearScores};
 
 pub struct PongPlugin;
 
 impl Plugin for PongPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(DefaultPlugins.set(
-            WindowPlugin {
-                primary_window: Some(Window {
-                    title: PONG_WINDOW_TITLE.to_string(),
-                    resize_constraints: WindowResizeConstraints {
-                        min_width: MIN_WINDOW_WIDTH,
-                        min_height: MIN_WINDOW_HEIGHT,
-                        max_width: MAX_WINDOW_WIDTH,
-                        max_height: MAX_WINDOW_HEIGHT,
-                    },
-                    present_mode: PresentMode::AutoNoVsync,
-                    //mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
-                    resolution: WindowResolution::new(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT),
+        app
+            .add_plugins(DefaultPlugins.set(
+                WindowPlugin {
+                    primary_window: Some(Window {
+                        title: PONG_WINDOW_TITLE.to_string(),
+                        resize_constraints: WindowResizeConstraints {
+                            min_width: MIN_WINDOW_WIDTH,
+                            min_height: MIN_WINDOW_HEIGHT,
+                            max_width: MAX_WINDOW_WIDTH,
+                            max_height: MAX_WINDOW_HEIGHT,
+                        },
+                        present_mode: PresentMode::AutoNoVsync,
+                        //mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+                        resolution: WindowResolution::new(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT),
+                        ..default()
+                    }),
                     ..default()
-                }),
-                ..default()
-            })
-        )
+                })
+            )
+            .add_plugins(ArenaPlugin)
             .add_plugins(ScorePlugin)
-            .add_systems(Startup, setup_camera.before(score::Systems::Startup))
-            .add_systems(Startup, (setup_arena, setup_paddles, setup_ball))
+            .insert_resource(RoundStartTimer::default())
+            .insert_resource(GameState::default())
+            .add_systems(Startup, (setup_paddles, setup_ball))
             .add_systems(PostStartup, start_round_timer)
             .add_systems(Update, (handle_user_input, handle_game_end))
             .add_systems(Update, move_ball.after(handle_user_input))
             .add_systems(Update, update_round_timer.before(score::Systems::Update))
             .add_systems(Update, detect_score.after(move_ball).before(score::Systems::Update))
-            .insert_resource(RoundStartTimer::default())
-            .insert_resource(GameState::default());
+            .configure_sets(Startup, (arena::Systems::CameraSetup).before(score::Systems::Startup));
     }
-}
-
-// Sets up the 2D camera for the Pong World
-fn setup_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::AutoMin { min_width: ARENA_WIDTH, min_height: ARENA_HEIGHT },
-            ..OrthographicProjection::default_2d()
-        })
-    ));
-}
-
-// Sets up the "Arena" that the game is played within
-fn setup_arena(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
-    // Background black box to outline playing field
-    commands.spawn((
-        Mesh2d(meshes.add(Rectangle::from_size(Vec2::new(ARENA_WIDTH, ARENA_HEIGHT)))),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::BLACK))),
-        Transform::from_translation(Vec3 {
-            z: -2f32,
-            ..default()
-        }),
-    ));
-
-    // Dashed line down the middle to separate left and right side of arena
-    commands.spawn((
-        Mesh2d(create_midline_mesh(&mut meshes)),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::WHITE))),
-        Transform::from_translation(Vec3::new(0f32, 0f32, -1f32)),
-    ));
-}
-
-fn create_midline_mesh(meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-
-    let mut vertices: Vec<[f32; 3]> = Vec::new();
-
-    // Push vertices for initial centered dash
-    vertices.push([-MIDLINE_DASH_WIDTH / 2f32, MIDLINE_DASH_HEIGHT / 2f32, 0.0]);
-    vertices.push([MIDLINE_DASH_WIDTH / 2f32, MIDLINE_DASH_HEIGHT / 2f32, 0.0]);
-    vertices.push([MIDLINE_DASH_WIDTH / 2f32, -MIDLINE_DASH_HEIGHT / 2f32, 0.0]);
-    vertices.push([-MIDLINE_DASH_WIDTH / 2f32, -MIDLINE_DASH_HEIGHT / 2f32, 0.0]);
-
-    let mut start_y = MIDLINE_DASH_HEIGHT * 1.5f32;
-
-    loop {        
-        if start_y >= (ARENA_HEIGHT / 2f32) {
-            // This dash would start beyond height of arena. We're done.
-            break;
-        }
-
-        let end_y = (start_y + MIDLINE_DASH_HEIGHT).min(ARENA_HEIGHT / 2f32);
-
-        // Dash in positive y space
-        vertices.push([-MIDLINE_DASH_WIDTH / 2f32, end_y, 0.0]);
-        vertices.push([MIDLINE_DASH_WIDTH / 2f32, end_y, 0.0]);
-        vertices.push([MIDLINE_DASH_WIDTH / 2f32, start_y, 0.0]);
-        vertices.push([-MIDLINE_DASH_WIDTH / 2f32, start_y, 0.0]);
-
-        // Mirrored dash in negative y space
-        vertices.push([-MIDLINE_DASH_WIDTH / 2f32, -start_y, 0.0]);
-        vertices.push([MIDLINE_DASH_WIDTH / 2f32, -start_y, 0.0]);
-        vertices.push([MIDLINE_DASH_WIDTH / 2f32, -end_y, 0.0]);
-        vertices.push([-MIDLINE_DASH_WIDTH / 2f32, -end_y, 0.0]);
-
-        start_y = end_y + MIDLINE_DASH_HEIGHT;
-    }
-
-    assert!((vertices.len() % 4) == 0, "Error generating midline mesh");
-
-    let mut indices: Vec<u16> = Vec::new();
-    for index in 0..(vertices.len() / 4) {
-        let i = index * 4;
-
-        // Each dash is 2 triangles within the mesh
-        indices.extend_from_slice(&[ i as u16, i as u16 + 1, i as u16 + 2 ]);
-        indices.extend_from_slice(&[ i as u16, i as u16 + 2, i as u16 + 3 ]);
-    }
-
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-    mesh.insert_indices(Indices::U16(indices));
-    meshes.add(mesh)
 }
 
 #[derive(Component)]
