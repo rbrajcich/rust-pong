@@ -164,6 +164,7 @@ mod tests {
     use super::*;
     use bevy::ecs::query::QuerySingleError::{MultipleEntities, NoEntities};
     use bevy::ecs::schedule::ScheduleBuildError;
+    use bevy::render::mesh::VertexAttributeValues;
 
     #[test]
     fn test_plugin_build() {
@@ -270,5 +271,216 @@ mod tests {
             Err(NoEntities(_)) => panic!("Expected single Camera, but none found."),
             Err(MultipleEntities(_)) => panic!("Expected single Camera, but found multiple."),
         }
+    }
+
+    #[test]
+    fn test_arena_setup_system() {
+        let mut world = World::default();
+
+        // System requires these resources to run
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<ColorMaterial>>();
+
+        // Run the system we need to test
+        let setup_sys = world.register_system(setup_arena);
+        world.run_system(setup_sys).unwrap();
+
+        // Run a helper system to perform validations
+        let validate_sys = world.register_system(validate_after_arena_setup);
+        world.run_system(validate_sys).unwrap();
+    }
+
+    #[test]
+    fn test_midline_mesh() {
+        let mut meshes = Assets::<Mesh>::default();
+        let handle = add_midline_mesh(&mut meshes);
+        let mesh = meshes
+            .get(handle.id())
+            .expect("Expected mesh to be added to meshes asset collection");
+
+        assert_eq!(
+            mesh.asset_usage,
+            RenderAssetUsages::RENDER_WORLD,
+            "Expected midline mesh to only be used by render world",
+        );
+
+        assert_eq!(
+            mesh.primitive_topology(),
+            PrimitiveTopology::TriangleList,
+            "Expected midline mesh to use triangle list topology",
+        );
+
+        let vals = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .expect("Expected mesh to contain positional vertex attribute data");
+
+        let VertexAttributeValues::Float32x3(verts) = vals else {
+            panic!("Expected positional values to be Float32x3 format");
+        };
+
+        let Indices::U16(indices) = mesh.indices().expect("Expected indices in mesh") else {
+            panic!("Expected u16 indices for mesh");
+        };
+
+        let mut index_chunks = indices.chunks_exact(6);
+        assert_eq!(
+            index_chunks.remainder().len(),
+            0,
+            "Expected number of indices in mesh to be divisible by 6",
+        );
+
+        // Validate first central dash
+        validate_midline_mesh_dash(
+            MIDLINE_DASH_HEIGHT / 2f32,
+            -MIDLINE_DASH_HEIGHT / 2f32,
+            index_chunks
+                .next()
+                .expect("Expected more dash indices to create dashed line"),
+            verts,
+        );
+
+        // (0.5*height) to skip half of initial dash, + (1.0*height) to leave a blank space
+        let mut start_y = MIDLINE_DASH_HEIGHT * 1.5f32;
+
+        // Each iter, validate 2 symmetrical top/bottom dashes, moving away from center point
+        loop {
+            if start_y >= (MIDLINE_Y_MAX) {
+                // This dash would start beyond height of arena. We're done.
+                break;
+            }
+
+            let end_y = (start_y + MIDLINE_DASH_HEIGHT).min(MIDLINE_Y_MAX);
+
+            validate_midline_mesh_dash(
+                end_y,
+                start_y,
+                index_chunks
+                    .next()
+                    .expect("Expected more dash indices to create dashed line"),
+                verts,
+            );
+            validate_midline_mesh_dash(
+                -start_y,
+                -end_y,
+                index_chunks
+                    .next()
+                    .expect("Expected more dash indices to create dashed line"),
+                verts,
+            );
+
+            start_y = end_y + MIDLINE_DASH_HEIGHT;
+        }
+    }
+
+    // --- Helper Functions ---
+
+    fn validate_after_arena_setup(
+        color_mat_res: Res<Assets<ColorMaterial>>,
+        mesh_res: Res<Assets<Mesh>>,
+        query: Query<(&Mesh2d, &MeshMaterial2d<ColorMaterial>)>,
+    ) {
+        let mut n_entities = 0;
+        for (m, mm) in query {
+            let color_mat = color_mat_res
+                .get(mm.id())
+                .expect("Expected to find underlying color material for MeshMaterial2d");
+            let mesh = mesh_res
+                .get(m.id())
+                .expect("Expected to find underlying mesh in Mesh2d");
+            match color_mat.color {
+                Color::BLACK => {
+                    // This must be the background. Sanity check on vertex data
+                    let vals = mesh
+                        .attribute(Mesh::ATTRIBUTE_POSITION)
+                        .expect("Expected mesh to contain positional vertex attribute data");
+                    let VertexAttributeValues::Float32x3(vals) = vals else {
+                        panic!(
+                            "Expected position attr to use Float32x3 format, not {:?}",
+                            vals
+                        );
+                    };
+                    let n_vert = vals.len();
+                    assert!(
+                        n_vert == 4,
+                        "Expected 4 vertices in arena background rect. Got {n_vert}",
+                    );
+                }
+                Color::WHITE => {
+                    // This must be the dashed line. Verifying its mesh is beyond this test.
+                }
+                color => panic!("Expected black arena and white background, not {:?}", color),
+            }
+            n_entities += 1;
+        }
+        assert!(n_entities == 2, "Expected 2 entities, but got {n_entities}");
+    }
+
+    //
+    // Check whether a given set of 6 indices contains the necessary vertices/edges to
+    // createa valid midline mesh dash between top_y and bot_y.
+    //
+    fn validate_midline_mesh_dash(top_y: f32, bot_y: f32, indices: &[u16], verts: &Vec<[f32; 3]>) {
+        assert_eq!(
+            indices.len(),
+            6,
+            "Expected 6 indices (2 triangles) to make up a dash",
+        );
+
+        // Each tuple is an "edge" of a triangle that will be rendered
+        let edges = [
+            (verts[indices[0] as usize], verts[indices[1] as usize]),
+            (verts[indices[1] as usize], verts[indices[2] as usize]),
+            (verts[indices[2] as usize], verts[indices[0] as usize]),
+            (verts[indices[3] as usize], verts[indices[4] as usize]),
+            (verts[indices[4] as usize], verts[indices[5] as usize]),
+            (verts[indices[5] as usize], verts[indices[3] as usize]),
+        ];
+
+        // It's a valid dash if 2 condiitons are met:
+        // 1. All vertices that make up the triangles are at a corner of the dash
+        // 2. All 4 'edges' of the rectangular dash are represented in triangles
+        for index in indices {
+            let vert = verts[*index as usize];
+            assert_eq!(
+                vert[0].abs(),
+                MIDLINE_X_MAG,
+                "Expected dash vertex to have x magnitude {}, but got {}",
+                MIDLINE_X_MAG,
+                vert[0].abs()
+            );
+            assert!(
+                (vert[1] == top_y) || (vert[1] == bot_y),
+                "Expected dash vertex to have y of {} or {}, but got {}",
+                top_y,
+                bot_y,
+                vert[1],
+            );
+            assert_eq!(
+                vert[2], 0f32,
+                "Expected dash vertex to have z value of 0, but got {}",
+                vert[2],
+            );
+        }
+        let mut edge_map: u8 = 0b0000; /* 4 bit mask of 4 edges being found */
+        for edge in edges {
+            if edge.0[0] != edge.1[0] {
+                if (edge.0[1] == top_y) && (edge.1[1] == top_y) {
+                    edge_map |= 0b0001; // Top Edge
+                } else if (edge.0[1] == bot_y) && (edge.1[1] == bot_y) {
+                    edge_map |= 0b0010; // Bottom Edge
+                }
+            } else if edge.0[1] != edge.1[1] {
+                if (edge.0[0] < 0f32) && (edge.1[0] < 0f32) {
+                    edge_map |= 0b0100; // Left Edge
+                } else if (edge.0[0] > 0f32) && (edge.1[0] > 0f32) {
+                    edge_map |= 0b1000; // Right Edge
+                }
+            }
+        }
+        assert!(
+            edge_map == 0b1111,
+            "Expected to find all 4 edges of dash, but at least one is missing. Bitmap {:b}",
+            edge_map,
+        );
     }
 }
