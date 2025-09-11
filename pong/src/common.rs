@@ -15,10 +15,6 @@ pub const MAX_WINDOW_HEIGHT: f32 = 4320.0;
 pub const INITIAL_WINDOW_WIDTH: f32 = 1600.0;
 pub const INITIAL_WINDOW_HEIGHT: f32 = 900.0;
 
-// Sizing parameters for paddles
-pub const PADDLE_HEIGHT_AS_SCREEN_PCT: f32 = 0.15;
-pub const PADDLE_ASPECT_RATIO: f32 = 0.15;
-
 // Sizing parameters for ball
 pub const BALL_SIZE_AS_SCREEN_HEIGHT_PCT: f32 = 0.02;
 
@@ -28,6 +24,7 @@ pub const BALL_MOVE_SPEED: f32 = 0.9 * ARENA_WIDTH;
 // Z-index values for various components
 pub const Z_BACKGROUND: f32 = -2f32;
 pub const Z_BEHIND_GAMEPLAY: f32 = -1f32;
+pub const Z_FOREGROUND: f32 = 1f32;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PlayerId {

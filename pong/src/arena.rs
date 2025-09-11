@@ -45,11 +45,11 @@ impl Plugin for ArenaPlugin {
 /// These SystemSets are used to control any system ordering dependencies on this plugin
 #[derive(SystemSet, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Systems {
-    /// CameraSetup will implement all logic to create the 2d camera entity. Must be in Setup.
+    /// Implements all logic to create the 2d camera entity. Must be in Startup.
     CameraSetup,
 
     ///
-    /// ArenaSetup will implement all logic to create the on screen background
+    /// Implements all logic to create the on screen background
     /// rectangle and dashed midline entities. Must be in Setup.
     ///
     ArenaSetup,

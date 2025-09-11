@@ -1,5 +1,6 @@
 mod arena;
 mod common;
+mod paddle;
 mod score;
 
 use bevy::sprite::Anchor;
@@ -11,6 +12,7 @@ use rand::Rng;
 
 use common::*;
 use arena::ArenaPlugin;
+use paddle::{PaddlePlugin, PaddleMarker, AllPaddleHitboxes, PaddleHitbox};
 use score::{ScorePlugin, PlayerScored, MaxScoreReached, ClearScores};
 
 pub struct PongPlugin;
@@ -37,27 +39,19 @@ impl Plugin for PongPlugin {
                 })
             )
             .add_plugins(ArenaPlugin)
+            .add_plugins(PaddlePlugin)
             .add_plugins(ScorePlugin)
             .insert_resource(RoundStartTimer::default())
             .insert_resource(GameState::default())
-            .add_systems(Startup, (setup_paddles, setup_ball))
+            .add_systems(Startup, setup_ball)
             .add_systems(PostStartup, start_round_timer)
-            .add_systems(Update, (handle_user_input, handle_game_end))
-            .add_systems(Update, move_ball.after(handle_user_input))
+            .add_systems(Update, handle_game_end)
+            .add_systems(Update, move_ball.after(paddle::Systems::HandleInput))
             .add_systems(Update, update_round_timer.before(score::Systems::Update))
             .add_systems(Update, detect_score.after(move_ball).before(score::Systems::Update))
             .configure_sets(Startup, (arena::Systems::CameraSetup).before(score::Systems::Startup));
     }
 }
-
-#[derive(Component)]
-struct Player1Paddle;
-
-#[derive(Component)]
-struct Player2Paddle;
-
-#[derive(Component)]
-struct Paddle;
 
 #[derive(Component)]
 struct Ball {
@@ -69,54 +63,6 @@ impl Default for Ball {
     fn default() -> Self {
         Ball { movement_dir: Dir2::X, paused: true }
     }
-}
-
-fn setup_paddles(mut commands: Commands) {
-    let mut paddle_size = Vec2 {
-        x: PADDLE_ASPECT_RATIO,
-        y: 1f32,
-    };
-    paddle_size *= ARENA_HEIGHT * PADDLE_HEIGHT_AS_SCREEN_PCT;
-
-    commands.spawn((
-        Paddle,
-        Player1Paddle,
-        Sprite {
-            color: Color::WHITE,
-            custom_size: Some(Vec2::ONE),
-            anchor: Anchor::CenterLeft,
-            ..default()
-        },
-        Transform {
-            translation: Vec3 {
-                x: -ARENA_WIDTH / 2f32,
-                y: 0f32,
-                z: 1.0f32,
-            },
-            scale: paddle_size.extend(0f32),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Paddle,
-        Player2Paddle,
-        Sprite {
-            color: Color::WHITE,
-            custom_size: Some(Vec2::ONE),
-            anchor: Anchor::CenterRight,
-            ..default()
-        },
-        Transform {
-            translation: Vec3 {
-                x: ARENA_WIDTH / 2f32,
-                y: 0f32,
-                z: 1.0f32,
-            },
-            scale: paddle_size.extend(0f32),
-            ..default()
-        },
-    ));
 }
 
 fn setup_ball(
@@ -134,42 +80,6 @@ fn setup_ball(
             Vec2::splat(BALL_SIZE_AS_SCREEN_HEIGHT_PCT * ARENA_HEIGHT).extend(0f32)
         ),
     ));
-}
-
-fn handle_user_input(
-    player1: Option<Single<&mut Transform, (With<Player1Paddle>, Without<Player2Paddle>)>>,
-    player2: Option<Single<&mut Transform, (With<Player2Paddle>, Without<Player1Paddle>)>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-) {
-    let mut player1_movement = 0;
-    let mut player2_movement = 0;
-    let multiplier = time.delta_secs() * ARENA_HEIGHT * 1.5;
-
-    if keys.pressed(KeyCode::KeyW) {
-        player1_movement += 1;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        player1_movement -= 1;
-    }
-    if keys.pressed(KeyCode::ArrowUp) {
-        player2_movement += 1;
-    }
-    if keys.pressed(KeyCode::ArrowDown) {
-        player2_movement -= 1;
-    }
-
-    if let Some(mut p1_trans) = player1 {
-        let clamp_y = (ARENA_HEIGHT / 2f32) - (p1_trans.scale.y / 2f32);
-        let new_y = p1_trans.translation.y + (player1_movement as f32 * multiplier);
-        p1_trans.translation.y = new_y.clamp(-clamp_y, clamp_y);
-    }
-
-    if let Some(mut p2_trans) = player2 {
-        let clamp_y = (ARENA_HEIGHT / 2f32) - (p2_trans.scale.y / 2f32);
-        let new_y = p2_trans.translation.y + (player2_movement as f32 * multiplier);
-        p2_trans.translation.y = new_y.clamp(-clamp_y, clamp_y);
-    }
 }
 
 #[derive(Resource, Default)]
@@ -224,8 +134,7 @@ fn collide_once(
     move_dist: f32,
     ball: &mut Ball,
     ball_tf: &mut Transform,
-    p1_tf: &Transform,
-    p2_tf: &Transform,
+    paddles: Query<AllPaddleHitboxes>,
 ) -> Option<f32> {
 
     // How far from center of ball should it "collide" with objects
@@ -243,30 +152,26 @@ fn collide_once(
     // (
     //     Plane origin offset for ball size,
     //     Plane,
+    //     Paddle bot offset for ball size,
     //     Paddle top offset for ball size,
-    //     Paddle bot offset for ball size
     // )
     let paddle = if ball.movement_dir.x > 0f32 {
         // Focus on collisions with p2 paddle if moving right
+        let hitbox = PaddleHitbox::from_query(paddles, Player2);
         (
-            Vec2::new(
-                p2_tf.translation.x - (p2_tf.scale.x + ball_rad),
-                p2_tf.translation.y,
-            ),
+            hitbox.plane_origin() - Vec2::new(ball_rad, 0f32),
             Plane2d::new(Vec2::NEG_X),
-            (p2_tf.translation.y - (p2_tf.scale.y / 2f32)) - ball_rad,
-            (p2_tf.translation.y + (p2_tf.scale.y / 2f32)) + ball_rad,
+            hitbox.bot_y() - ball_rad,
+            hitbox.top_y() + ball_rad,
         )
     } else {
         // Otherwise, focus on p1 paddle
+        let hitbox = PaddleHitbox::from_query(paddles, Player1);
         (
-            Vec2::new(
-                p1_tf.translation.x + p1_tf.scale.x + ball_rad,
-                p1_tf.translation.y,
-            ),
+            hitbox.plane_origin() + Vec2::new(ball_rad, 0f32),
             Plane2d::new(Vec2::X),
-            (p1_tf.translation.y - (p1_tf.scale.y / 2f32)) - ball_rad,
-            (p1_tf.translation.y + (p1_tf.scale.y / 2f32)) + ball_rad,
+            hitbox.bot_y() - ball_rad,
+            hitbox.top_y() + ball_rad,
         )
     };
 
@@ -316,18 +221,16 @@ fn collide_once(
 
 fn move_ball(
     time: Res<Time>,
-    ball_q: Single<(&mut Ball, &mut Transform), (Without<Player1Paddle>, Without<Player2Paddle>)>,
-    player1: Single<&Transform, With<Player1Paddle>>,
-    player2: Single<&Transform, With<Player2Paddle>>,
+    ball_q: Single<(&mut Ball, &mut Transform), Without<PaddleMarker>>,
+    paddles: Query<AllPaddleHitboxes>,
 ) {
     let (mut ball, mut ball_tf) = ball_q.into_inner();
 
     if !ball.paused {
         let mut move_dist = time.delta_secs() * BALL_MOVE_SPEED;
-
         loop {
             let collision_dist = collide_once(
-                move_dist, &mut ball, &mut ball_tf, &player1, &player2
+                move_dist, &mut ball, &mut ball_tf, paddles
             );
             match collision_dist {
                 Some(dist) => move_dist -= dist,
