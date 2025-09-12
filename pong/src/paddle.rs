@@ -203,3 +203,81 @@ fn handle_input_move_paddles(
         _ => (), // No p2 movement if neither or both are pressed
     }
 }
+
+// -------------------------------------------------------------------------------------------------
+// Unit Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::schedule::ScheduleBuildError;
+
+    #[test]
+    fn test_sys_add_setup() {
+        let mut app = App::new();
+        app.add_plugins(PaddlePlugin);
+
+        // This ordering will lead to an error (which we expect) if the system
+        // exists and is in the system set as it should be.
+        app.configure_sets(Startup, Systems::Startup.before(setup_paddles));
+        let init_result = app
+            .world_mut()
+            .try_schedule_scope(Startup, |world, sched| sched.initialize(world))
+            .expect("Expected Startup schedule to exist in app");
+        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
+            panic!(concat!(
+                "Expected Startup schedule build to fail, ",
+                "since 'setup_paddles' should be in Startup system set. But it succeeded"
+            ));
+        };
+    }
+
+    #[test]
+    fn test_sys_add_handle_input() {
+        let mut app = App::new();
+        app.add_plugins(PaddlePlugin);
+
+        // This ordering will lead to an error (which we expect) if the system
+        // exists and is in the system set as it should be.
+        app.configure_sets(Update, Systems::HandleInput.before(handle_input_move_paddles));
+        let init_result = app
+            .world_mut()
+            .try_schedule_scope(Update, |world, sched| sched.initialize(world))
+            .expect("Expected Update schedule to exist in app");
+        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
+            panic!(concat!(
+                "Expected Update schedule build to fail, ",
+                "since 'handle_input_move_paddles' should be in Startup system set. ",
+                "But it succeeded",
+            ));
+        };
+    }
+
+    #[test]
+    fn test_setup_paddles_system() {
+        let mut world = World::default();
+
+        // Run the system and let it create entities we expect
+        let setup_sys = world.register_system(setup_paddles);
+        world.run_system(setup_sys).unwrap();
+
+        // Show Without<PaddleMarker> works to guarantee disjoint queries
+        let mut query = world.query_filtered::<Entity, Without<PaddleMarker>>();
+        assert_eq!(
+            query.iter(&world).count(),
+            0,
+            "Expected no items in query when using filter Without<PaddleMarker>"
+        );
+
+        // Validate paddles are created with sensible values
+        let mut query_state = world.query::<AllPaddleHitboxes>();
+        let p1_paddle = PaddleHitbox::from_query(query_state.query(&world), Player1);
+        let p2_paddle = PaddleHitbox::from_query(query_state.query(&world), Player2);
+
+    }
+
+    #[test]
+    fn test_handle_input_system() {
+        todo!()
+    }
+}
