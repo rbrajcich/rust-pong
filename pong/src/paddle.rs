@@ -211,6 +211,7 @@ fn handle_input_move_paddles(
 mod tests {
     use super::*;
     use bevy::ecs::schedule::ScheduleBuildError;
+    use std::time::Duration;
 
     #[test]
     fn test_sys_add_setup() {
@@ -239,7 +240,10 @@ mod tests {
 
         // This ordering will lead to an error (which we expect) if the system
         // exists and is in the system set as it should be.
-        app.configure_sets(Update, Systems::HandleInput.before(handle_input_move_paddles));
+        app.configure_sets(
+            Update,
+            Systems::HandleInput.before(handle_input_move_paddles),
+        );
         let init_result = app
             .world_mut()
             .try_schedule_scope(Update, |world, sched| sched.initialize(world))
@@ -262,22 +266,297 @@ mod tests {
         world.run_system(setup_sys).unwrap();
 
         // Show Without<PaddleMarker> works to guarantee disjoint queries
-        let mut query = world.query_filtered::<Entity, Without<PaddleMarker>>();
+        let mut query = world.query_filtered::<&Transform, Without<PaddleMarker>>();
         assert_eq!(
             query.iter(&world).count(),
             0,
             "Expected no items in query when using filter Without<PaddleMarker>"
         );
 
-        // Validate paddles are created with sensible values
-        let mut query_state = world.query::<AllPaddleHitboxes>();
-        let p1_paddle = PaddleHitbox::from_query(query_state.query(&world), Player1);
-        let p2_paddle = PaddleHitbox::from_query(query_state.query(&world), Player2);
+        // Validate paddles are created with sensible values.
+        let mut query_state = world.query::<(&PaddleMarker, &Sprite, &Transform)>();
+        let query = query_state.query(&world);
+        assert_eq!(
+            query.iter().len(),
+            2,
+            "Expected 2 paddles to be added by setup system",
+        );
+        let mut seen_pid: Option<PlayerId> = None;
+        for (&PaddleMarker(pid), sprite, tf) in query {
+            // Confirm the paddles have different PlayerId values.
+            match seen_pid {
+                None => seen_pid = Some(pid),
+                Some(seen_pid) => assert_ne!(
+                    seen_pid, pid,
+                    "Expected each paddle to be different PlayerId",
+                ),
+            }
 
+            // Some common properties that both paddles should have
+            assert_eq!(
+                sprite.custom_size,
+                Some(Vec2::ONE),
+                "Expected sprite size of 1, so transform scale is real effective size",
+            );
+            assert_eq!(
+                tf.scale,
+                Vec3::new(PADDLE_WIDTH, PADDLE_HEIGHT, 0f32),
+                "Expected paddle size {}x{}x0 but got {}",
+                PADDLE_WIDTH,
+                PADDLE_HEIGHT,
+                tf.scale,
+            );
+            assert_eq!(
+                tf.translation.y, 0f32,
+                "Expected paddle at y of zero (vertically centered). Got {}",
+                tf.translation.y,
+            );
+            assert_eq!(
+                tf.translation.z, Z_FOREGROUND,
+                "Expected paddle to be at foreground Z coord of {}, but got {}",
+                Z_FOREGROUND, tf.translation.z,
+            );
+
+            // Last couple validations, which are done per-paddle.
+            match pid {
+                Player1 => {
+                    assert_eq!(
+                        sprite.anchor,
+                        Anchor::CenterLeft,
+                        "Expected P1 paddle anchored at CenterLeft, got {:?}",
+                        sprite.anchor,
+                    );
+                    assert_eq!(
+                        tf.translation.x,
+                        -ARENA_WIDTH / 2f32,
+                        "Expected P1 paddle x at left edge of screen, {}, but got {}",
+                        -ARENA_WIDTH / 2f32,
+                        tf.translation.x,
+                    );
+                }
+                Player2 => {
+                    assert_eq!(
+                        sprite.anchor,
+                        Anchor::CenterRight,
+                        "Expected P2 paddle anchored at CenterRight, got {:?}",
+                        sprite.anchor,
+                    );
+                    assert_eq!(
+                        tf.translation.x,
+                        ARENA_WIDTH / 2f32,
+                        "Expected P2 paddle x at right edge of screen, {}, but got {}",
+                        ARENA_WIDTH / 2f32,
+                        tf.translation.x,
+                    );
+                }
+            }
+        }
     }
 
     #[test]
-    fn test_handle_input_system() {
-        todo!()
+    fn test_handle_input_no_keys_down() {
+        run_handle_input_scenario(Duration::from_millis(5), [].as_slice(), 0f32, 0f32);
+    }
+
+    #[test]
+    fn test_handle_input_w_down() {
+        run_handle_input_scenario(
+            Duration::from_millis(5),
+            [KeyCode::KeyW, KeyCode::ArrowDown].as_slice(),
+            0.005 * PADDLE_MOVE_SPEED,
+            -0.005 * PADDLE_MOVE_SPEED,
+        );
+    }
+
+    #[test]
+    fn test_handle_input_s_up() {
+        run_handle_input_scenario(
+            Duration::from_millis(5),
+            [KeyCode::KeyS, KeyCode::ArrowUp].as_slice(),
+            -0.005 * PADDLE_MOVE_SPEED,
+            0.005 * PADDLE_MOVE_SPEED,
+        );
+    }
+
+    #[test]
+    fn test_handle_input_both_dirs_pressed() {
+        run_handle_input_scenario(
+            Duration::from_millis(5),
+            [
+                KeyCode::KeyS,
+                KeyCode::KeyW,
+                KeyCode::ArrowDown,
+                KeyCode::ArrowUp,
+            ]
+            .as_slice(),
+            0f32,
+            0f32,
+        );
+    }
+
+    #[test]
+    fn test_handle_input_positive_cap() {
+        run_handle_input_scenario(
+            Duration::from_secs(5),
+            [KeyCode::KeyW, KeyCode::ArrowUp].as_slice(),
+            (ARENA_HEIGHT / 2f32) - (PADDLE_HEIGHT / 2f32),
+            (ARENA_HEIGHT / 2f32) - (PADDLE_HEIGHT / 2f32),
+        );
+    }
+
+    #[test]
+    fn test_handle_input_negative_cap() {
+        run_handle_input_scenario(
+            Duration::from_secs(5),
+            [KeyCode::KeyS, KeyCode::ArrowDown].as_slice(),
+            (-ARENA_HEIGHT / 2f32) + (PADDLE_HEIGHT / 2f32),
+            (-ARENA_HEIGHT / 2f32) + (PADDLE_HEIGHT / 2f32),
+        );
+    }
+
+    #[test]
+    fn test_hitbox_api() {
+        let mut world = World::default();
+
+        // Run a system to place a couple paddles in the world
+        let setup_sys = world.register_system(|mut commands: Commands| {
+            commands.spawn((
+                PaddleMarker(Player2),
+                Transform {
+                    translation: Vec3::new(10f32, 3f32, 0f32),
+                    scale: Vec3::new(PADDLE_WIDTH, PADDLE_HEIGHT, 0f32),
+                    ..default()
+                },
+            ));
+            commands.spawn((
+                PaddleMarker(Player1),
+                Transform {
+                    translation: Vec3::new(-5f32, 8f32, 0f32),
+                    scale: Vec3::new(PADDLE_WIDTH, PADDLE_HEIGHT, 0f32),
+                    ..default()
+                },
+            ));
+        });
+        world.run_system(setup_sys).unwrap();
+
+        // Get our Hitbox query handle
+        let mut query_state = world.query::<AllPaddleHitboxes>();
+        let hitbox_query = query_state.query(&world);
+
+        // Validate player 1 hitbox parameters
+        let p1_hitbox = PaddleHitbox::from_query(hitbox_query, Player1);
+        let exp_top_y = 8f32 + (PADDLE_HEIGHT / 2f32);
+        let exp_bot_y = 8f32 - (PADDLE_HEIGHT / 2f32);
+        let exp_plane_x = -5f32 + PADDLE_WIDTH;
+        assert_eq!(
+            p1_hitbox.top_y(),
+            exp_top_y,
+            "Expected p1 hitbox top at y coord {}, but got {}",
+            exp_top_y,
+            p1_hitbox.top_y(),
+        );
+        assert_eq!(
+            p1_hitbox.bot_y(),
+            exp_bot_y,
+            "Expected p1 hitbox bottom at y coord {}, but got {}",
+            exp_bot_y,
+            p1_hitbox.bot_y(),
+        );
+        assert_eq!(
+            p1_hitbox.plane_origin().x,
+            exp_plane_x,
+            "Expected p1 plane origin x coord {}, but got {}",
+            exp_plane_x,
+            p1_hitbox.plane_origin().x,
+        );
+        assert!(
+            (p1_hitbox.plane_origin().y <= exp_top_y) && (p1_hitbox.plane_origin().y >= exp_bot_y),
+            "Expected p1 plane origin y coord between {} and {}, but got {}",
+            exp_bot_y,
+            exp_top_y,
+            p1_hitbox.plane_origin().y,
+        );
+
+        // Validate player 2 hitbox parameters
+        let p2_hitbox = PaddleHitbox::from_query(hitbox_query, Player2);
+        let exp_top_y = 3f32 + (PADDLE_HEIGHT / 2f32);
+        let exp_bot_y = 3f32 - (PADDLE_HEIGHT / 2f32);
+        let exp_plane_x = 10f32 - PADDLE_WIDTH;
+        assert_eq!(
+            p2_hitbox.top_y(),
+            exp_top_y,
+            "Expected p2 hitbox top at y coord {}, but got {}",
+            exp_top_y,
+            p2_hitbox.top_y(),
+        );
+        assert_eq!(
+            p2_hitbox.bot_y(),
+            exp_bot_y,
+            "Expected p2 hitbox bottom at y coord {}, but got {}",
+            exp_bot_y,
+            p2_hitbox.bot_y(),
+        );
+        assert_eq!(
+            p2_hitbox.plane_origin().x,
+            exp_plane_x,
+            "Expected p2 plane origin x coord {}, but got {}",
+            exp_plane_x,
+            p2_hitbox.plane_origin().x,
+        );
+        assert!(
+            (p2_hitbox.plane_origin().y <= exp_top_y) && (p2_hitbox.plane_origin().y >= exp_bot_y),
+            "Expected p2 plane origin y coord between {} and {}, but got {}",
+            exp_bot_y,
+            exp_top_y,
+            p2_hitbox.plane_origin().y,
+        );
+    }
+
+    // ----- Helper Functions -----
+
+    fn run_handle_input_scenario(
+        time_delta: Duration,
+        keys_pressed: &[KeyCode],
+        p1_y: f32,
+        p2_y: f32,
+    ) {
+        let mut world = World::default();
+
+        // Run system to set up paddles
+        let setup_sys = world.register_system(setup_paddles);
+        world.run_system(setup_sys).unwrap();
+
+        // Insert resource with specified time delta
+        let mut time: Time<()> = Time::default();
+        time.advance_by(time_delta);
+        world.insert_resource(time);
+
+        // Insert resource with specified keys "pressed"
+        let mut button_input = ButtonInput::<KeyCode>::default();
+        for key in keys_pressed {
+            button_input.press(*key);
+        }
+        world.insert_resource(button_input);
+
+        // Run system to move paddles
+        let handle_input_sys = world.register_system(handle_input_move_paddles);
+        world.run_system(handle_input_sys).unwrap();
+
+        // Validate y positions are updated to expected values
+        let mut query = world.query::<(&PaddleMarker, &Transform)>();
+        let (p1_tf, p2_tf) = query
+            .iter(&world)
+            .map(|(pm, tf)| (pm.0, tf))
+            .as_per_player();
+        assert_eq!(
+            p1_tf.translation.y, p1_y,
+            "Expected p1 y to be {p1_y} but it was {}",
+            p1_tf.translation.y,
+        );
+        assert_eq!(
+            p2_tf.translation.y, p2_y,
+            "Expected p2 y to be {p2_y} but it was {}",
+            p2_tf.translation.y,
+        );
     }
 }
