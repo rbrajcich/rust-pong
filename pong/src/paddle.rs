@@ -210,51 +210,22 @@ fn handle_input_move_paddles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::schedule::ScheduleBuildError;
+    use bevy_test_helpers::prelude::*;
     use std::time::Duration;
 
     #[test]
-    fn test_sys_add_setup() {
-        let mut app = App::new();
-        app.add_plugins(PaddlePlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // exists and is in the system set as it should be.
-        app.configure_sets(Startup, Systems::Startup.before(setup_paddles));
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Startup, |world, sched| sched.initialize(world))
-            .expect("Expected Startup schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Startup schedule build to fail, ",
-                "since 'setup_paddles' should be in Startup system set. But it succeeded"
-            ));
-        };
+    fn test_plugin_sys_added_setup() {
+        validate_sys_in_plugin(PaddlePlugin, Startup, setup_paddles, Some(Systems::Startup));
     }
 
     #[test]
-    fn test_sys_add_handle_input() {
-        let mut app = App::new();
-        app.add_plugins(PaddlePlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // exists and is in the system set as it should be.
-        app.configure_sets(
+    fn test_plugin_sys_added_handle_input() {
+        validate_sys_in_plugin(
+            PaddlePlugin,
             Update,
-            Systems::HandleInput.before(handle_input_move_paddles),
+            handle_input_move_paddles,
+            Some(Systems::HandleInput),
         );
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Update, |world, sched| sched.initialize(world))
-            .expect("Expected Update schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Update schedule build to fail, ",
-                "since 'handle_input_move_paddles' should be in Startup system set. ",
-                "But it succeeded",
-            ));
-        };
     }
 
     #[test]

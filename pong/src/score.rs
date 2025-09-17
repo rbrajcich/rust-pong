@@ -293,18 +293,14 @@ fn clear_scores(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::schedule::ScheduleBuildError;
+    use bevy_test_helpers::prelude::*;
 
     #[test]
     fn test_plugin_build() {
         let mut app = App::new();
         app.add_plugins(ScorePlugin);
 
-        // Validate expected plugins made it into the app
-        assert!(
-            app.is_plugin_added::<ScorePlugin>(),
-            "Expected ScorePlugin to be added"
-        );
+        // Validate expected dependent plugin made it into the app
         assert!(
             app.is_plugin_added::<DynamicFontsizePlugin>(),
             "Expected DynamicFontsizePlugin to be added by ScorePlugin"
@@ -328,123 +324,26 @@ mod tests {
             world.is_resource_added::<Events<ClearScores>>(),
             "Expected ClearScores event to be added by ScorePlugin"
         );
-
-        // Validate systems were added to Startup schedule as intended
-        let mut exp_startup_systems = [(core::any::type_name_of_val(&setup), false)];
-        app.get_schedule(Startup)
-            .expect("Expected Startup schedule to exist in app")
-            .graph()
-            .systems()
-            .for_each(|(_, boxed_sys, _)| {
-                for exp_sys in exp_startup_systems.iter_mut() {
-                    if boxed_sys.name() == exp_sys.0 {
-                        assert!(
-                            !exp_sys.1,
-                            "Expected to find {} only once in Startup, but found twice",
-                            exp_sys.0,
-                        );
-                        exp_sys.1 = true;
-                        return;
-                    }
-                }
-            });
-        for exp_sys in exp_startup_systems {
-            assert!(
-                exp_sys.1,
-                "Expected to find {} in Startup schedule, but it was missing",
-                exp_sys.0,
-            );
-        }
-
-        // Validate systems were added to Update schedule as intended
-        let mut exp_update_systems = [
-            (core::any::type_name_of_val(&handle_player_score), false),
-            (core::any::type_name_of_val(&clear_scores), false),
-        ];
-        app.get_schedule(Update)
-            .expect("Expected Update schedule to exist in app")
-            .graph()
-            .systems()
-            .for_each(|(_, boxed_sys, _)| {
-                for exp_sys in exp_update_systems.iter_mut() {
-                    if boxed_sys.name() == exp_sys.0 {
-                        assert!(
-                            !exp_sys.1,
-                            "Expected to find {} only once in Update, but found twice",
-                            exp_sys.0,
-                        );
-                        exp_sys.1 = true;
-                        return;
-                    }
-                }
-            });
-        for exp_sys in exp_update_systems {
-            assert!(
-                exp_sys.1,
-                "Expected to find {} in Update schedule, but it was missing",
-                exp_sys.0,
-            );
-        }
     }
 
     #[test]
-    fn test_sys_ordering_setup() {
-        let mut app = App::new();
-        app.add_plugins(ScorePlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // is in the system set as it should be.
-        app.configure_sets(Startup, Systems::Startup.before(setup));
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Startup, |world, sched| sched.initialize(world))
-            .expect("Expected Startup schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Startup schedule build to fail, ",
-                "since 'setup' should be in Startup system set. But it succeeded"
-            ));
-        };
+    fn test_plugin_sys_added_setup() {
+        validate_sys_in_plugin(ScorePlugin, Startup, setup, Some(Systems::Startup));
     }
 
     #[test]
-    fn test_sys_ordering_handle_player_score() {
-        let mut app = App::new();
-        app.add_plugins(ScorePlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // is in the system set as it should be.
-        app.configure_sets(Update, Systems::Update.before(handle_player_score));
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Update, |world, sched| sched.initialize(world))
-            .expect("Expected Update schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Update schedule build to fail, ",
-                "since 'handle_player_score' should be in Update system set. But it succeeded"
-            ));
-        };
+    fn test_plugin_sys_added_handle_player_score() {
+        validate_sys_in_plugin(
+            ScorePlugin,
+            Update,
+            handle_player_score,
+            Some(Systems::Update),
+        );
     }
 
     #[test]
-    fn test_sys_ordering_clear_scores() {
-        let mut app = App::new();
-        app.add_plugins(ScorePlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // is in the system set as it should be.
-        app.configure_sets(Update, Systems::Update.before(clear_scores));
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Update, |world, sched| sched.initialize(world))
-            .expect("Expected Update schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Update schedule build to fail, ",
-                "since 'clear_scores' should be in Update system set. But it succeeded"
-            ));
-        };
+    fn test_plugin_sys_added_clear_scores() {
+        validate_sys_in_plugin(ScorePlugin, Update, clear_scores, Some(Systems::Update));
     }
 
     #[test]

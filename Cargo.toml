@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [ "bevy_dyn_fontsize","pong"]
+members = [ "bevy_dyn_fontsize", "bevy_test_helpers","pong"]
 
 
 [profile.dev]

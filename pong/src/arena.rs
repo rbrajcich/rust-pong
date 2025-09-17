@@ -163,83 +163,22 @@ fn add_midline_mesh(meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
 mod tests {
     use super::*;
     use bevy::ecs::query::QuerySingleError::{MultipleEntities, NoEntities};
-    use bevy::ecs::schedule::ScheduleBuildError;
     use bevy::render::mesh::VertexAttributeValues;
+    use bevy_test_helpers::prelude::*;
 
     #[test]
-    fn test_plugin_build() {
-        let mut app = App::new();
-        app.add_plugins(ArenaPlugin);
-
-        // Validate systems were added to Startup schedule as intended
-        let mut exp_startup_systems = [
-            (core::any::type_name_of_val(&setup_camera), false),
-            (core::any::type_name_of_val(&setup_arena), false),
-        ];
-        app.get_schedule(Startup)
-            .expect("Expected Startup schedule to exist in app")
-            .graph()
-            .systems()
-            .for_each(|(_, boxed_sys, _)| {
-                for exp_sys in exp_startup_systems.iter_mut() {
-                    if boxed_sys.name() == exp_sys.0 {
-                        assert!(
-                            !exp_sys.1,
-                            "Expected to find {} only once in Startup, but found twice",
-                            exp_sys.0,
-                        );
-                        exp_sys.1 = true;
-                        return;
-                    }
-                }
-            });
-        for exp_sys in exp_startup_systems {
-            assert!(
-                exp_sys.1,
-                "Expected to find {} in Startup schedule, but it was missing",
-                exp_sys.0,
-            );
-        }
+    fn test_plugin_sys_added_setup_camera() {
+        validate_sys_in_plugin(
+            ArenaPlugin,
+            Startup,
+            setup_camera,
+            Some(Systems::CameraSetup),
+        );
     }
 
     #[test]
-    fn test_sys_ordering_camera() {
-        let mut app = App::new();
-        app.add_plugins(ArenaPlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // is in the system set as it should be.
-        app.configure_sets(Startup, Systems::CameraSetup.before(setup_camera));
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Startup, |world, sched| sched.initialize(world))
-            .expect("Expected Startup schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Startup schedule build to fail, ",
-                "since 'setup_camera' should be in CameraSetup system set. But it succeeded"
-            ));
-        };
-    }
-
-    #[test]
-    fn test_sys_ordering_arena() {
-        let mut app = App::new();
-        app.add_plugins(ArenaPlugin);
-
-        // This ordering will lead to an error (which we expect) if the system
-        // is in the system set as it should be.
-        app.configure_sets(Startup, Systems::ArenaSetup.before(setup_arena));
-        let init_result = app
-            .world_mut()
-            .try_schedule_scope(Startup, |world, sched| sched.initialize(world))
-            .expect("Expected Startup schedule to exist in app");
-        let Err(ScheduleBuildError::SetsHaveOrderButIntersect(..)) = init_result else {
-            panic!(concat!(
-                "Expected Startup schedule build to fail, ",
-                "since 'setup_arena' should be in ArenaSetup system set. But it succeeded"
-            ));
-        };
+    fn test_plugin_sys_added_setup_arena() {
+        validate_sys_in_plugin(ArenaPlugin, Startup, setup_arena, Some(Systems::ArenaSetup));
     }
 
     #[test]

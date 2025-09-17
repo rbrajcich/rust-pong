@@ -7,3 +7,6 @@ edition = "2024"
 bevy = "0.16.1"
 rand = "0.9.2"
 bevy_dyn_fontsize = { path = "../bevy_dyn_fontsize" }
+
+[dev-dependencies]
+bevy_test_helpers = {path = "../bevy_test_helpers" }
