@@ -58,10 +58,15 @@ impl Plugin for ScorePlugin {
             .add_event::<PlayerScored>()
             .add_event::<MaxScoreReached>()
             .add_event::<ClearScores>()
-            .add_systems(Startup, setup.in_set(Systems::Startup))
+            .add_systems(Startup, setup.in_set(Systems::SetupAfterCamera))
             .add_systems(
                 Update,
-                (handle_player_score, clear_scores).in_set(Systems::Update),
+                (
+                    handle_player_score
+                        .in_set(Systems::PlayerScoredRcvr)
+                        .in_set(Systems::MaxScoreReachedSndr),
+                    clear_scores.in_set(Systems::ClearScoresRcvr),
+                ),
             );
     }
 }
@@ -94,22 +99,36 @@ pub struct ClearScores;
 /// Code using this plugin should ensure the requirements are met for each:
 ///
 /// The single in-game Camera2d MUST be created in the startup state, BEFORE
-/// the Startup SystemSet here runs.
+/// the SetupAfterCamera SystemSet here runs.
 ///
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Systems {
     ///
-    /// The required single Camera2d Entity MUST be created in the startup phase
-    /// BEFORE this SystemSet is run.
+    /// The required single Camera2d Entity MUST be created
+    /// BEFORE this SystemSet is run. Must be in Startup.
     ///
-    Startup,
+    SetupAfterCamera,
 
     ///
-    /// Systems writing PlayerScored or ClearScores Events SHOULD occur in the
-    /// Update schedule BEFORE this SystemSet is run, to ensure score changes
-    /// are reflected in the same game loop iteration they are detected.
+    /// Systems handling PlayerScored events occur in this set, so it should be ordered
+    /// after any systems that write this event type if it's necessary that the
+    /// score update should be reflected in the same frame. Must be in Update.
     ///
-    Update,
+    PlayerScoredRcvr,
+
+    ///
+    /// Systems sending MaxScoreReached events occur in this set, so it should be ordered
+    /// before any systems that read this event type if its necessary that they
+    /// react to it in the same frame. Must be in Update.
+    ///
+    MaxScoreReachedSndr,
+
+    ///
+    /// Systems handling ClearScores events occur in this set, so it should be ordered
+    /// after any systems that write this event type if it's necessary that the
+    /// score clearing should be reflected in the same frame. Must be in Update.
+    ///
+    ClearScoresRcvr,
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -137,7 +156,7 @@ struct WinText(PlayerId);
 // Private Systems
 
 //
-// Setup system to spawn each of the 4 on-screen Entities managed by the score
+// Startup system to spawn each of the 4 on-screen Entities managed by the score
 // module. Note that content and visibility of each may change, but they are
 // all spawned during startup and exist throughout the duration of the game.
 //
@@ -328,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_plugin_sys_added_setup() {
-        validate_sys_in_plugin(ScorePlugin, Startup, setup, Some(Systems::Startup));
+        validate_sys_in_plugin(ScorePlugin, Startup, setup, Some(Systems::SetupAfterCamera));
     }
 
     #[test]
@@ -337,13 +356,24 @@ mod tests {
             ScorePlugin,
             Update,
             handle_player_score,
-            Some(Systems::Update),
+            Some(Systems::PlayerScoredRcvr),
+        );
+        validate_sys_in_plugin(
+            ScorePlugin,
+            Update,
+            handle_player_score,
+            Some(Systems::MaxScoreReachedSndr),
         );
     }
 
     #[test]
     fn test_plugin_sys_added_clear_scores() {
-        validate_sys_in_plugin(ScorePlugin, Update, clear_scores, Some(Systems::Update));
+        validate_sys_in_plugin(
+            ScorePlugin,
+            Update,
+            clear_scores,
+            Some(Systems::ClearScoresRcvr),
+        );
     }
 
     #[test]

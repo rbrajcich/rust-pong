@@ -15,12 +15,12 @@ use crate::common::*;
 // -------------------------------------------------------------------------------------------------
 // Constants
 
-pub const PADDLE_HEIGHT_AS_SCREEN_PCT: f32 = 0.15;
-pub const PADDLE_ASPECT_RATIO: f32 = 0.15;
-pub const PADDLE_MOVE_SPEED: f32 = ARENA_HEIGHT * 1.5;
-pub const PADDLE_HEIGHT: f32 = PADDLE_HEIGHT_AS_SCREEN_PCT * ARENA_HEIGHT;
-pub const PADDLE_WIDTH: f32 = PADDLE_HEIGHT * PADDLE_ASPECT_RATIO;
-pub const PADDLE_CLAMP_Y: f32 = (ARENA_HEIGHT / 2f32) - (PADDLE_HEIGHT / 2f32);
+const PADDLE_HEIGHT_AS_SCREEN_PCT: f32 = 0.15;
+const PADDLE_ASPECT_RATIO: f32 = 0.15;
+const PADDLE_MOVE_SPEED: f32 = ARENA_HEIGHT * 1.5;
+const PADDLE_HEIGHT: f32 = PADDLE_HEIGHT_AS_SCREEN_PCT * ARENA_HEIGHT;
+const PADDLE_WIDTH: f32 = PADDLE_HEIGHT * PADDLE_ASPECT_RATIO;
+const PADDLE_CLAMP_Y: f32 = (ARENA_HEIGHT / 2f32) - (PADDLE_HEIGHT / 2f32);
 
 // -------------------------------------------------------------------------------------------------
 // Public API
@@ -35,7 +35,7 @@ pub struct PaddlePlugin;
 
 impl Plugin for PaddlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_paddles.in_set(Systems::Startup))
+        app.add_systems(Startup, setup_paddles.in_set(Systems::PaddleCreation))
             .add_systems(
                 Update,
                 handle_input_move_paddles.in_set(Systems::HandleInput),
@@ -46,8 +46,8 @@ impl Plugin for PaddlePlugin {
 /// These SystemSets are used to control any system ordering dependencies on this plugin
 #[derive(SystemSet, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Systems {
-    /// Implements all logic to create the paddle entities. Must be in Startup.
-    Startup,
+    /// Creates the paddle entities. Must be in Startup.
+    PaddleCreation,
 
     ///
     /// Implements all logic to retrieve user input events and update
@@ -215,7 +215,12 @@ mod tests {
 
     #[test]
     fn test_plugin_sys_added_setup() {
-        validate_sys_in_plugin(PaddlePlugin, Startup, setup_paddles, Some(Systems::Startup));
+        validate_sys_in_plugin(
+            PaddlePlugin,
+            Startup,
+            setup_paddles,
+            Some(Systems::PaddleCreation),
+        );
     }
 
     #[test]

@@ -6,11 +6,11 @@
 // -------------------------------------------------------------------------------------------------
 // Included Symbols
 
+use core::any::type_name;
+
 use bevy::ecs::schedule::ScheduleBuildError;
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
-
-use core::any::type_name;
 
 // -------------------------------------------------------------------------------------------------
 // Public API
