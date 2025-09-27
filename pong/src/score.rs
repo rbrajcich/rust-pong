@@ -75,7 +75,7 @@ impl Plugin for ScorePlugin {
 /// This event should be triggered by other code to notify the score module when
 /// a player score has been detected (including the scorer's PlayerId).
 ///
-#[derive(Event)]
+#[derive(Event, Debug, PartialEq, Eq)]
 pub struct PlayerScored(pub PlayerId);
 
 ///

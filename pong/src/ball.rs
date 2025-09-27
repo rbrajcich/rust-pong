@@ -109,7 +109,7 @@ pub enum Systems {
 /// If a system needs to respond to this event in the same frame, it should be ordered
 /// before the BallOffScreenSndr SystemSet.
 ///
-#[derive(Event)]
+#[derive(Event, Clone, Copy)]
 pub enum BallOffScreen {
     Left,
     Right,
