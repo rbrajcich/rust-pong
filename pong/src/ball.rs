@@ -109,7 +109,7 @@ pub enum Systems {
 /// If a system needs to respond to this event in the same frame, it should be ordered
 /// before the BallOffScreenSndr SystemSet.
 ///
-#[derive(Event, Clone, Copy)]
+#[derive(Event, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BallOffScreen {
     Left,
     Right,
@@ -222,7 +222,8 @@ fn handle_reset_ball(
 
         let (mut ball, mut ball_tf) = ball_q.into_inner();
         ball.paused = true;
-        ball_tf.translation = Vec3::ZERO;
+        ball_tf.translation.x = 0f32;
+        ball_tf.translation.y = 0f32;
     }
 }
 
@@ -345,5 +346,276 @@ fn collide_once(
         (Some(_pad_imp), Some(wall_imp)) => apply_collision(wall_imp), // TODO equals case???
         (None, Some(imp)) | (Some(imp), None) => apply_collision(imp),
         (None, None) => None,
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Unit Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::schedule::AnonymousSet;
+    use bevy_test_helpers::prelude::*;
+
+    #[test]
+    fn test_plugin_build() {
+        let mut app = App::new();
+        app.add_plugins(BallPlugin);
+
+        let world = app.world();
+        assert!(
+            world.is_resource_added::<Events<BallOffScreen>>(),
+            "Expected BallOffScreen events to be added by BallPlugin",
+        );
+        assert!(
+            world.is_resource_added::<Events<StartBall>>(),
+            "Expected StartBall events to be added by BallPlugin",
+        );
+        assert!(
+            world.is_resource_added::<Events<ResetBall>>(),
+            "Expected ResetBall events to be added by BallPlugin",
+        );
+    }
+
+    #[test]
+    fn test_plugin_added_sys_setup() {
+        validate_sys_in_plugin(BallPlugin, Startup, setup_ball, Some(Systems::BallCreation));
+    }
+
+    #[test]
+    fn test_plugin_added_sys_move() {
+        validate_sys_in_plugin(
+            BallPlugin,
+            Update,
+            move_and_collide,
+            Option::<AnonymousSet>::None,
+        );
+    }
+
+    #[test]
+    fn test_plugin_added_sys_detect_off_screen() {
+        validate_sys_in_plugin(
+            BallPlugin,
+            Update,
+            detect_ball_off_screen,
+            Some(Systems::BallOffScreenSndr),
+        );
+    }
+
+    #[test]
+    fn test_plugin_added_sys_handle_reset() {
+        validate_sys_in_plugin(
+            BallPlugin,
+            Update,
+            handle_reset_ball,
+            Some(Systems::ResetBallRcvr),
+        );
+    }
+
+    #[test]
+    fn test_plugin_added_sys_handle_start() {
+        validate_sys_in_plugin(
+            BallPlugin,
+            Update,
+            handle_start_ball,
+            Some(Systems::StartBallRcvr),
+        );
+    }
+
+    #[test]
+    fn test_setup_system() {
+        let mut world = World::default();
+
+        // Run the system
+        let setup_sys = world.register_system(setup_ball);
+        world.run_system(setup_sys).unwrap();
+
+        // Validate ball created as expected
+        let mut query = world.query::<(&Ball, &Sprite, &Transform)>();
+        let (ball, sprite, ball_tf) = query.single(&world).unwrap_or_else(|err| {
+            panic!(
+                "Expected successful query for single ball. Got error {:?}",
+                err,
+            );
+        });
+        assert!(ball.paused, "Expected ball to start in paused state");
+        assert_eq!(
+            sprite.color, BALL_COLOR,
+            "Expected sprite to be use hardcoded BALL_COLOR",
+        );
+        let size = sprite
+            .custom_size
+            .expect("Expected custom size of 1x1 for ball sprite");
+        assert_eq!(
+            size,
+            Vec2::ONE,
+            "Expected ball sprite to have size 1x1, got {}",
+            size,
+        );
+        assert_eq!(
+            sprite.anchor,
+            Anchor::Center,
+            "Expected ball sprite anchored in center, got {:?}",
+            sprite.anchor
+        );
+        assert_eq!(
+            ball_tf.scale,
+            Vec3::new(BALL_SIZE, BALL_SIZE, 0f32),
+            "Expected Ball to be BALL_SIZE x BALL_SIZE x 0, but got {}",
+            ball_tf.scale,
+        );
+    }
+
+    #[test]
+    fn test_ball_off_screen_sys_paused() {
+        test_ball_off_screen_helper(true, BALL_OFF_SCREEN_X_MAG * 2f32, None);
+    }
+
+    #[test]
+    fn test_ball_off_screen_sys_left() {
+        test_ball_off_screen_helper(
+            false,
+            -(BALL_OFF_SCREEN_X_MAG + 1f32),
+            Some(BallOffScreen::Left),
+        );
+    }
+
+    #[test]
+    fn test_ball_off_screen_sys_right() {
+        test_ball_off_screen_helper(
+            false,
+            BALL_OFF_SCREEN_X_MAG + 1f32,
+            Some(BallOffScreen::Right),
+        );
+    }
+
+    #[test]
+    fn test_ball_off_screen_sys_neither() {
+        test_ball_off_screen_helper(false, BALL_OFF_SCREEN_X_MAG - 1f32, None);
+    }
+
+    #[test]
+    fn test_reset_ball_sys() {
+        let mut world = World::default();
+
+        // Spawn Ball in the world
+        world.spawn((
+            Ball {
+                movement_dir: Dir2::X,
+                paused: false,
+            },
+            Transform {
+                translation: Vec3::new(45f32, -102f32, 8f32),
+                ..default()
+            },
+        ));
+
+        // Create event and resource containing it, for system to receive
+        let mut events = Events::<ResetBall>::default();
+        events.send(ResetBall);
+        world.insert_resource(events);
+
+        // Run the system
+        let reset_sys = world.register_system(handle_reset_ball);
+        world.run_system(reset_sys).unwrap();
+
+        // Validate Ball was reset
+        let mut query = world.query::<(&Ball, &Transform)>();
+        let (ball, ball_tf) = query.single(&world).unwrap_or_else(|err| {
+            panic!("Attempt to query single Ball failed with err {err}");
+        });
+        assert!(ball.paused, "Expected ball to be paused after reset");
+        assert_eq!(
+            ball_tf.translation,
+            Vec3::new(0f32, 0f32, 8f32),
+            "Expected Ball translation of {} but got {}",
+            Vec3::new(0f32, 0f32, 8f32),
+            ball_tf.translation,
+        );
+    }
+
+    #[test]
+    fn test_start_ball_sys() {
+        let mut world = World::default();
+
+        // Spawn Ball in the world
+        world.spawn((
+            Ball {
+                movement_dir: Dir2::X,
+                paused: true,
+            },
+            Transform::default(),
+        ));
+
+        // Create event and resource containing it, for system to receive
+        let mut events = Events::<StartBall>::default();
+        events.send(StartBall);
+        world.insert_resource(events);
+
+        // Run the system
+        let start_sys = world.register_system(handle_start_ball);
+        world.run_system(start_sys).unwrap();
+
+        // Validate Ball was started (note we ignore direction part, since it's random)
+        let mut query = world.query::<&Ball>();
+        let ball = query.single(&world).unwrap_or_else(|err| {
+            panic!("Attempt to query single Ball failed with err {err}");
+        });
+        assert!(
+            !ball.paused,
+            "Expected ball to be unpaused after start event"
+        );
+    }
+
+    // --- Helper Functions ---
+
+    fn test_ball_off_screen_helper(
+        ball_paused: bool,
+        ball_x: f32,
+        expected_event: Option<BallOffScreen>,
+    ) {
+        let mut world = World::default();
+
+        // Spawn Ball in the world given the input parameters
+        world.spawn((
+            Ball {
+                movement_dir: Dir2::X,
+                paused: ball_paused,
+            },
+            Transform {
+                translation: Vec3::new(ball_x, 0f32, 0f32),
+                ..default()
+            },
+        ));
+
+        // Add the BallOffScreen event resource for the system to write to
+        world.init_resource::<Events<BallOffScreen>>();
+
+        // Run the system
+        let detect_sys = world.register_system(detect_ball_off_screen);
+        world.run_system(detect_sys).unwrap();
+
+        // Validate if the event was generated or not
+        let events = world.get_resource::<Events<BallOffScreen>>().unwrap();
+        let mut evt_cursor = events.get_cursor();
+        let mut evt_iter = evt_cursor.read(&events);
+        if expected_event.is_none() {
+            assert!(
+                evt_iter.next().is_none(),
+                "Expected no BallOffScreen event, but got one",
+            );
+        } else {
+            let received_evt = *evt_iter
+                .next()
+                .expect("Expected a BallOffScreen event, but got none");
+            assert_eq!(
+                received_evt,
+                expected_event.unwrap(),
+                "Expected event {:?} but got event {:?}",
+                expected_event.unwrap(),
+                received_evt,
+            );
+        }
     }
 }
