@@ -337,7 +337,7 @@ fn collide_once(
         ball_tf.translation = impact_point.extend(0f32);
         ball.movement_dir =
             Dir2::new_unchecked(ball.movement_dir.reflect(collision.1.normal.as_vec2()));
-        Some(move_dist - collision.0)
+        Some(collision.0)
     };
 
     match (paddle_collision, wall_collision) {
@@ -357,6 +357,7 @@ mod tests {
     use super::*;
     use bevy::ecs::schedule::AnonymousSet;
     use bevy_test_helpers::prelude::*;
+    use std::time::Duration;
 
     #[test]
     fn test_plugin_build() {
@@ -468,6 +469,64 @@ mod tests {
     }
 
     #[test]
+    fn test_move_while_paused() {
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: true,
+            time_delta: Duration::from_millis(100),
+            init_pos: Vec2::ZERO,
+            init_dir: Dir2::X,
+            p1_paddle_ends: (0f32, 0f32),
+            p2_paddle_ends: (0f32, 0f32),
+            exp_pos: Vec2::ZERO,
+            exp_dir: Dir2::X,
+        });
+    }
+
+    #[test]
+    fn test_move_no_collision() {
+        let move_dir = Dir2::from_xy(2f32, 1f32).unwrap();
+        let exp_move = Vec2 {
+            x: 0.1 * move_dir.x * BALL_SPEED,
+            y: 0.1 * move_dir.y * BALL_SPEED,
+        };
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+            time_delta: Duration::from_millis(100),
+            init_pos: Vec2::ZERO,
+            init_dir: move_dir,
+            p1_paddle_ends: (0f32, 0f32),
+            p2_paddle_ends: (0f32, 0f32),
+            exp_pos: exp_move,
+            exp_dir: move_dir,
+        });
+    }
+
+    #[test]
+    fn test_move_collide_left() {
+        let exp_collision_x =
+            (-ARENA_WIDTH / 2.0) + paddle::tests::get_paddle_width() + (BALL_SIZE / 2.0);
+        let exp_collision_y = 0.0;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_delta: Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5),
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y - 3.0),
+            init_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (1.0, -1.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x + 2.0, exp_collision_y + 1.5),
+            exp_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
     fn test_ball_off_screen_sys_paused() {
         test_ball_off_screen_helper(true, BALL_OFF_SCREEN_X_MAG * 2f32, None);
     }
@@ -568,7 +627,88 @@ mod tests {
         );
     }
 
+    // --- Helper Types ---
+
+    struct TestMoveCollideCfg {
+        paused: bool,
+        time_delta: Duration,
+        init_pos: Vec2,
+        init_dir: Dir2,
+        p1_paddle_ends: (f32, f32), // Y coordinates of top and bottom
+        p2_paddle_ends: (f32, f32), // Y coordinates of top and bottom
+        exp_pos: Vec2,
+        exp_dir: Dir2,
+    }
+
     // --- Helper Functions ---
+
+    fn test_move_and_collide_helper(cfg: &TestMoveCollideCfg) {
+        let mut world = World::default();
+
+        // Spawn Paddles and Ball based on Config
+        paddle::tests::spawn_test_paddle(
+            &mut world,
+            cfg.p1_paddle_ends.0,
+            cfg.p1_paddle_ends.1,
+            Player1,
+        );
+        paddle::tests::spawn_test_paddle(
+            &mut world,
+            cfg.p2_paddle_ends.0,
+            cfg.p2_paddle_ends.1,
+            Player2,
+        );
+        world.spawn((
+            Ball {
+                movement_dir: cfg.init_dir,
+                paused: cfg.paused,
+            },
+            Transform {
+                translation: cfg.init_pos.extend(0f32),
+                scale: Vec2::splat(BALL_SIZE).extend(0f32),
+                ..default()
+            },
+        ));
+
+        // Set up Time resource to simulate configured time delta
+        let mut time = Time::<()>::default();
+        time.advance_by(cfg.time_delta);
+        world.insert_resource(time);
+
+        // Run the move/collision system
+        let move_sys = world.register_system(move_and_collide);
+        world.run_system(move_sys).unwrap();
+
+        // Validate the new position and direction of the ball
+        let mut query = world.query::<(&Ball, &Transform)>();
+        let (ball, ball_tf) = query.single(&world).unwrap_or_else(|err| {
+            panic!("Expected single query of Ball to succeed, but got err {err}");
+        });
+        assert!(
+            (ball.movement_dir.x - cfg.exp_dir.x).abs() < 0.00001,
+            "Expected movement dir x coordinate of {} but got {}",
+            cfg.exp_dir.x,
+            ball.movement_dir.x,
+        );
+        assert!(
+            (ball.movement_dir.y - cfg.exp_dir.y).abs() < 0.00001,
+            "Expected movement dir y coordinate of {} but got {}",
+            cfg.exp_dir.y,
+            ball.movement_dir.y,
+        );
+        assert!(
+            (ball_tf.translation.x - cfg.exp_pos.x).abs() < 0.00001,
+            "Expected ball pos x coordinate of {} but got {}",
+            cfg.exp_pos.x,
+            ball_tf.translation.x,
+        );
+        assert!(
+            (ball_tf.translation.y - cfg.exp_pos.y).abs() < 0.00001,
+            "Expected ball pos y coordinate of {} but got {}",
+            cfg.exp_pos.y,
+            ball_tf.translation.y,
+        );
+    }
 
     fn test_ball_off_screen_helper(
         ball_paused: bool,

@@ -208,7 +208,7 @@ fn handle_input_move_paddles(
 // Unit Tests
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use bevy_test_helpers::prelude::*;
     use std::time::Duration;
@@ -534,5 +534,35 @@ mod tests {
             "Expected p2 y to be {p2_y} but it was {}",
             p2_tf.translation.y,
         );
+    }
+
+    // --- External API For Other Test Suites ---
+    pub fn spawn_test_paddle(world: &mut World, top_y: f32, bot_y: f32, player: PlayerId) {
+        let x = match player {
+            Player1 => -ARENA_WIDTH / 2f32,
+            Player2 => ARENA_WIDTH / 2f32,
+        };
+
+        assert!(top_y >= bot_y, "Expected top_y to be greater than bot_y");
+
+        let paddle_height = top_y - bot_y;
+        let paddle_y = bot_y + (paddle_height / 2f32);
+
+        world.spawn((
+            PaddleMarker(player),
+            Transform {
+                translation: Vec3 {
+                    x: x,
+                    y: paddle_y,
+                    z: 0f32,
+                },
+                scale: Vec3::new(PADDLE_WIDTH, paddle_height, 0f32),
+                ..default()
+            },
+        ));
+    }
+
+    pub fn get_paddle_width() -> f32 {
+        return PADDLE_WIDTH;
     }
 }
