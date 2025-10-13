@@ -8,23 +8,53 @@
 // Included Symbols
 
 use std::f32::consts::PI;
+use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use rand::Rng;
 
 use crate::common::*;
-use crate::paddle::{self, AllPaddleHitboxes, PaddleHitbox, PaddleMarker};
+use crate::paddle::{self, AllPaddleHitboxes, Paddle, PaddleHitbox};
 
 // -------------------------------------------------------------------------------------------------
 // Constants
 
-const BALL_COLOR: Color = Color::srgb_u8(0, 255, 0);
 const BALL_SIZE_AS_SCREEN_HEIGHT_PCT: f32 = 0.02;
 const BALL_SPEED_AS_SCREEN_WIDTH_PCT: f32 = 0.9;
 const BALL_SIZE: f32 = BALL_SIZE_AS_SCREEN_HEIGHT_PCT * ARENA_HEIGHT;
 const BALL_SPEED: f32 = BALL_SPEED_AS_SCREEN_WIDTH_PCT * ARENA_WIDTH;
 const BALL_OFF_SCREEN_X_MAG: f32 = (ARENA_WIDTH / 2f32) - (BALL_SIZE / 2f32);
+
+const BALL_CURVE_CFG_NONE: CurveLevelCfg = CurveLevelCfg {
+    color: BallColor::Solid(Color::srgb_u8(0, 255, 0)),
+    rotate_rad_per_sec: 0.0,
+    curve_rad_per_sec: 0.0,
+};
+const BALL_CURVE_CFG_L1: CurveLevelCfg = CurveLevelCfg {
+    color: BallColor::Solid(Color::srgb_u8(0, 255, 0)),
+    rotate_rad_per_sec: 2.0 * PI,
+    curve_rad_per_sec: 0.1 * PI,
+};
+const BALL_CURVE_CFG_L2: CurveLevelCfg = CurveLevelCfg {
+    color: BallColor::Solid(Color::srgb_u8(255, 255, 0)),
+    rotate_rad_per_sec: 3.0 * PI,
+    curve_rad_per_sec: 0.3 * PI,
+};
+const BALL_CURVE_CFG_L3: CurveLevelCfg = CurveLevelCfg {
+    color: BallColor::Blinking {
+        blink_time: Duration::from_millis(230),
+        colors: &[Color::srgb_u8(0, 255, 0), Color::srgb_u8(255, 255, 0)],
+    },
+    rotate_rad_per_sec: 5.0 * PI,
+    curve_rad_per_sec: 0.6 * PI,
+};
+const BALL_CURVE_LEVELS: [CurveLevelCfg; 4] = [
+    BALL_CURVE_CFG_NONE,
+    BALL_CURVE_CFG_L1,
+    BALL_CURVE_CFG_L2,
+    BALL_CURVE_CFG_L3,
+];
 
 // -------------------------------------------------------------------------------------------------
 // Public API
@@ -46,10 +76,15 @@ impl Plugin for BallPlugin {
             .add_systems(
                 Update,
                 (
-                    move_and_collide.before(detect_ball_off_screen),
+                    move_and_collide
+                        .before(detect_ball_off_screen)
+                        .before(apply_curve_visuals),
                     detect_ball_off_screen.in_set(Systems::BallOffScreenSndr),
-                    handle_reset_ball.in_set(Systems::ResetBallRcvr),
+                    handle_reset_ball
+                        .in_set(Systems::ResetBallRcvr)
+                        .before(apply_curve_visuals),
                     handle_start_ball.in_set(Systems::StartBallRcvr),
+                    apply_curve_visuals,
                 ),
             )
             .configure_sets(
@@ -71,6 +106,9 @@ pub struct Ball {
 
     // Current paused state for the ball. It will not move when paused.
     paused: bool,
+
+    // The current curve state of this ball.
+    curve: CurveState,
 }
 
 ///
@@ -136,6 +174,114 @@ pub struct ResetBall;
 pub struct StartBall;
 
 // -------------------------------------------------------------------------------------------------
+// Private Types
+
+// Represents a possible color (or blinking color sequence) for the ball.
+enum BallColor<'a> {
+    Solid(Color),
+    Blinking {
+        blink_time: Duration,
+        colors: &'a [Color],
+    },
+}
+
+// Represents a particular curve state/configuration to apply to the ball.
+struct CurveLevelCfg<'a> {
+    color: BallColor<'a>,
+    rotate_rad_per_sec: f32, // Should always be positive
+    curve_rad_per_sec: f32,  // Should always be positive
+}
+
+// Represents the direction the ball is currently curving in, if any.
+#[derive(PartialEq, Eq, Default, Clone, Copy)]
+enum CurveDir {
+    #[default]
+    None,
+    Clockwise,
+    CounterClockwise,
+}
+
+// Represents the overall state of curving applied to a ball.
+#[derive(Default)]
+struct CurveState {
+    dir: CurveDir,
+    cfg_idx: usize,
+    color_timer: Timer,
+    color_idx: usize,
+}
+
+impl CurveState {
+    //
+    // Given the current curve state, update it according to some event/collision that
+    // has applied the new curve direction. This should either stop the curve, amplify it,
+    // or change its direction and reset it to the first curve level.
+    //
+    fn apply_curve(&mut self, dir: CurveDir) {
+        let prev_state = (self.dir, self.cfg_idx);
+        if dir == CurveDir::None {
+            self.dir = CurveDir::None;
+            self.cfg_idx = 0;
+        } else if dir == self.dir {
+            // Same curve as already applied. Strengthen it if possible.
+            if self.cfg_idx < (BALL_CURVE_LEVELS.len() - 1) {
+                self.cfg_idx += 1;
+            }
+        } else {
+            // Applying a new curve direction. Start at level 1.
+            self.dir = dir;
+            self.cfg_idx = 1;
+        }
+
+        // If we actually changed our curve level or direction, update ball accordingly
+        if prev_state != (self.dir, self.cfg_idx) {
+            let new_state = BALL_CURVE_LEVELS.get(self.cfg_idx).unwrap();
+            match new_state.color {
+                BallColor::Solid(_) => self.color_timer.pause(),
+                BallColor::Blinking { blink_time, .. } => {
+                    self.color_timer = Timer::new(blink_time, TimerMode::Repeating);
+                    self.color_idx = 0;
+                }
+            }
+        }
+    }
+
+    //
+    // Get the current color that should be applied to the ball during the current frame.
+    // Takes time_delta as input to update internal animation state as needed for this frame.
+    //
+    fn get_color(&mut self, time_delta: Duration) -> Color {
+        let cur_state = BALL_CURVE_LEVELS.get(self.cfg_idx).unwrap();
+        match cur_state.color {
+            BallColor::Solid(color) => color,
+            BallColor::Blinking { colors, .. } => {
+                self.color_timer.tick(time_delta);
+                self.color_idx += self.color_timer.times_finished_this_tick() as usize;
+                self.color_idx %= colors.len();
+                *colors.get(self.color_idx).unwrap()
+            }
+        }
+    }
+
+    //
+    // Given the time_delta for the current frame, return how many radians the ball
+    // should be rotated by according to its current curve state.
+    //
+    fn get_rotation_delta(&self, time_delta: Duration) -> f32 {
+        let cur_state = BALL_CURVE_LEVELS.get(self.cfg_idx).unwrap();
+        cur_state.rotate_rad_per_sec * time_delta.as_secs_f32()
+    }
+
+    //
+    // Given the time_delta for the current frame, return how many radians the ball's
+    // trajectory should be rotated by according to its current curve state.
+    //
+    fn get_trajectory_delta(&self, time_delta: Duration) -> f32 {
+        let cur_state = BALL_CURVE_LEVELS.get(self.cfg_idx).unwrap();
+        cur_state.curve_rad_per_sec * time_delta.as_secs_f32()
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
 // Private Systems
 
 //
@@ -147,9 +293,9 @@ fn setup_ball(mut commands: Commands) {
         Ball {
             movement_dir: Dir2::X,
             paused: true,
+            curve: CurveState::default(),
         },
         Sprite {
-            color: BALL_COLOR,
             custom_size: Some(Vec2::ONE),
             anchor: Anchor::Center,
             ..default()
@@ -165,12 +311,23 @@ fn setup_ball(mut commands: Commands) {
 //
 fn move_and_collide(
     time: Res<Time>,
-    ball_q: Single<(&mut Ball, &mut Transform), Without<PaddleMarker>>,
+    ball_q: Single<(&mut Ball, &mut Transform), Without<Paddle>>,
     paddles: Query<AllPaddleHitboxes>,
 ) {
     let (mut ball, mut ball_tf) = ball_q.into_inner();
 
     if !ball.paused {
+        // Update trajectory based on curve
+        let trajectory_delta = match ball.curve.dir {
+            CurveDir::Clockwise => Mat2::from_angle(-ball.curve.get_trajectory_delta(time.delta())),
+            CurveDir::CounterClockwise => {
+                Mat2::from_angle(ball.curve.get_trajectory_delta(time.delta()))
+            }
+            CurveDir::None => Mat2::IDENTITY,
+        };
+        ball.movement_dir = Dir2::new(trajectory_delta * ball.movement_dir.as_vec2()).unwrap();
+
+        // Move the ball along its trajectory and collide as needed
         let mut move_dist = time.delta_secs() * BALL_SPEED;
         loop {
             let collision_dist = collide_once(move_dist, &mut ball, &mut ball_tf, paddles);
@@ -179,10 +336,29 @@ fn move_and_collide(
                 None => break,
             };
         }
-
         let movement_vec = ball.movement_dir * move_dist;
         ball_tf.translation += movement_vec.extend(0f32);
     }
+}
+
+//
+// This system updates the ball's Sprite's visual appearance each frame based on the current
+// curve defined in CurveState, including color and rotation.
+//
+fn apply_curve_visuals(time: Res<Time>, ball_q: Single<(&mut Ball, &mut Sprite, &mut Transform)>) {
+    let (mut ball, mut sprite, mut ball_tf) = ball_q.into_inner();
+
+    // Update the color of the ball based on current curve state
+    let color = ball.curve.get_color(time.delta());
+    sprite.color = color;
+
+    // Update visual rotation of the ball's sprite based on current curve state
+    let rotation_delta = match ball.curve.dir {
+        CurveDir::Clockwise => -ball.curve.get_rotation_delta(time.delta()),
+        CurveDir::CounterClockwise => ball.curve.get_rotation_delta(time.delta()),
+        CurveDir::None => 0f32,
+    };
+    ball_tf.rotation *= Quat::from_rotation_z(rotation_delta);
 }
 
 //
@@ -221,9 +397,11 @@ fn handle_reset_ball(
         events.clear();
 
         let (mut ball, mut ball_tf) = ball_q.into_inner();
+        ball.curve.apply_curve(CurveDir::None);
         ball.paused = true;
         ball_tf.translation.x = 0f32;
         ball_tf.translation.y = 0f32;
+        ball_tf.rotation = Quat::IDENTITY;
     }
 }
 
@@ -289,6 +467,7 @@ fn collide_once(
     //     Plane,
     //     Paddle bot offset for ball size,
     //     Paddle top offset for ball size,
+    //     Applied spin on ball,
     // )
     let paddle = if ball.movement_dir.x > 0f32 {
         // Focus on collisions with p2 paddle if moving right
@@ -298,6 +477,11 @@ fn collide_once(
             Plane2d::new(Vec2::NEG_X),
             hitbox.bot_y() - ball_rad,
             hitbox.top_y() + ball_rad,
+            match hitbox.movement_dir() {
+                paddle::MoveDirection::Up => CurveDir::CounterClockwise,
+                paddle::MoveDirection::Down => CurveDir::Clockwise,
+                paddle::MoveDirection::None => CurveDir::None,
+            },
         )
     } else {
         // Otherwise, focus on p1 paddle
@@ -307,20 +491,30 @@ fn collide_once(
             Plane2d::new(Vec2::X),
             hitbox.bot_y() - ball_rad,
             hitbox.top_y() + ball_rad,
+            match hitbox.movement_dir() {
+                paddle::MoveDirection::Up => CurveDir::Clockwise,
+                paddle::MoveDirection::Down => CurveDir::CounterClockwise,
+                paddle::MoveDirection::None => CurveDir::None,
+            },
         )
     };
 
     let ball_ray = Ray2d::new(ball_tf.translation.xy(), ball.movement_dir);
 
-    // (Distance to impact point, Normal, Cached impact point once computed)
-    struct Collision(f32, Plane2d, Option<Vec2>);
+    // (Distance to impact point, Normal, CurveDir if applies, Cached impact point once computed)
+    struct Collision(f32, Plane2d, Option<CurveDir>, Option<Vec2>);
 
     let mut paddle_collision: Option<Collision> = None;
     if let Some(dist) = ball_ray.intersect_plane(paddle.0, paddle.1) {
         if dist <= move_dist {
             let impact_point = ball_ray.get_point(dist);
             if (impact_point.y >= paddle.2) && (impact_point.y <= paddle.3) {
-                paddle_collision = Some(Collision(dist, paddle.1, Some(impact_point)));
+                paddle_collision = Some(Collision(
+                    dist,
+                    paddle.1,
+                    Some(paddle.4),
+                    Some(impact_point),
+                ));
             }
         }
     }
@@ -328,22 +522,29 @@ fn collide_once(
     let mut wall_collision: Option<Collision> = None;
     if let Some(dist) = ball_ray.intersect_plane(wall.0, wall.1) {
         if dist <= move_dist {
-            wall_collision = Some(Collision(dist, wall.1, None));
+            wall_collision = Some(Collision(dist, wall.1, None, None));
         }
     }
 
     let mut apply_collision = |collision: Collision| {
-        let impact_point = collision.2.unwrap_or(ball_ray.get_point(collision.0));
+        let impact_point = collision.3.unwrap_or(ball_ray.get_point(collision.0));
         ball_tf.translation = impact_point.extend(0f32);
         ball.movement_dir =
             Dir2::new_unchecked(ball.movement_dir.reflect(collision.1.normal.as_vec2()));
+        if let Some(curve_dir) = collision.2 {
+            ball.curve.apply_curve(curve_dir);
+        }
         Some(collision.0)
     };
 
     match (paddle_collision, wall_collision) {
         (Some(pad_imp), Some(wall_imp)) if pad_imp.0 < wall_imp.0 => apply_collision(pad_imp),
         (Some(pad_imp), Some(wall_imp)) if wall_imp.0 < pad_imp.0 => apply_collision(wall_imp),
-        (Some(_pad_imp), Some(wall_imp)) => apply_collision(wall_imp), // TODO equals case???
+        (Some(pad_imp), Some(wall_imp)) => {
+            // Hitting wall and paddle at same dist (corner)
+            apply_collision(wall_imp);
+            apply_collision(pad_imp)
+        }
         (None, Some(imp)) | (Some(imp), None) => apply_collision(imp),
         (None, None) => None,
     }
@@ -441,10 +642,6 @@ mod tests {
             );
         });
         assert!(ball.paused, "Expected ball to start in paused state");
-        assert_eq!(
-            sprite.color, BALL_COLOR,
-            "Expected sprite to be use hardcoded BALL_COLOR",
-        );
         let size = sprite
             .custom_size
             .expect("Expected custom size of 1x1 for ball sprite");
@@ -472,7 +669,7 @@ mod tests {
     fn test_move_while_paused() {
         test_move_and_collide_helper(&TestMoveCollideCfg {
             paused: true,
-            time_delta: Duration::from_millis(100),
+            time_deltas: &[Duration::from_millis(100)],
             init_pos: Vec2::ZERO,
             init_dir: Dir2::X,
             p1_paddle_ends: (0f32, 0f32),
@@ -483,26 +680,8 @@ mod tests {
     }
 
     #[test]
-    fn test_move_no_collision() {
-        let move_dir = Dir2::from_xy(2f32, 1f32).unwrap();
-        let exp_move = Vec2 {
-            x: 0.1 * move_dir.x * BALL_SPEED,
-            y: 0.1 * move_dir.y * BALL_SPEED,
-        };
-        test_move_and_collide_helper(&TestMoveCollideCfg {
-            paused: false,
-            time_delta: Duration::from_millis(100),
-            init_pos: Vec2::ZERO,
-            init_dir: move_dir,
-            p1_paddle_ends: (0f32, 0f32),
-            p2_paddle_ends: (0f32, 0f32),
-            exp_pos: exp_move,
-            exp_dir: move_dir,
-        });
-    }
-
-    #[test]
     fn test_move_collide_left() {
+        // Solid collision with paddle
         let exp_collision_x =
             (-ARENA_WIDTH / 2.0) + paddle::tests::get_paddle_width() + (BALL_SIZE / 2.0);
         let exp_collision_y = 0.0;
@@ -511,7 +690,7 @@ mod tests {
             paused: false,
 
             // Time so that distance after collision is half of pre-collision
-            time_delta: Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5),
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
 
             // Use known 3/4/5 triangle for pre-collision vector for simplicity
             init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y - 3.0),
@@ -523,6 +702,330 @@ mod tests {
             // Post reflection vector should be half of pre-collision 3/4/5 triangle
             exp_pos: Vec2::new(exp_collision_x + 2.0, exp_collision_y + 1.5),
             exp_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_left_with_time_stop() {
+        // Perform a single collision, but with 2 executions of the move/collide system.
+        // The time stops right at the moment of collision, to ensure exactly 1 collision occurs.
+        let exp_collision_x =
+            (-ARENA_WIDTH / 2.0) + paddle::tests::get_paddle_width() + (BALL_SIZE / 2.0);
+        let exp_collision_y = 0.0;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[
+                Duration::from_secs_f32(5.0 / BALL_SPEED),
+                Duration::from_secs_f32((5.0 / BALL_SPEED) * 0.5),
+            ],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y - 3.0),
+            init_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (1.0, -1.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x + 2.0, exp_collision_y + 1.5),
+            exp_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_barely_left() {
+        // Barely collide with corner of paddle
+        let exp_collision_x =
+            (-ARENA_WIDTH / 2.0) + paddle::tests::get_paddle_width() + (BALL_SIZE / 2.0);
+        let exp_collision_y = 0.0 + (BALL_SIZE / 4.0); // 1/4 of ball overlapping paddle edge
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y + 3.0),
+            init_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, -1.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x + 2.0, exp_collision_y - 1.5),
+            exp_dir: Dir2::from_xy(4.0, -3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_miss_barely_left() {
+        // Barely miss the edge of the paddle
+        let exp_intersect_x =
+            (-ARENA_WIDTH / 2.0) + paddle::tests::get_paddle_width() + (BALL_SIZE / 2.0);
+        let exp_intersect_y = 0.0 + (BALL_SIZE / 2.0) + 0.001;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time long enough to pass would-be collision point
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 2.0)],
+
+            // Use known 3/4/5 triangle for pre-intersection vector for simplicity
+            init_pos: Vec2::new(exp_intersect_x + 4.0, exp_intersect_y - 3.0),
+            init_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, -1.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Should continue traveling past intersection point without collision
+            exp_pos: Vec2::new(exp_intersect_x - 4.0, exp_intersect_y + 3.0),
+            exp_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_right() {
+        // Solid collision with paddle
+        let exp_collision_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_collision_y = 0.0;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (1.0, -1.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x - 2.0, exp_collision_y + 1.5),
+            exp_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_right_with_time_stop() {
+        // Perform a single collision, but with 2 executions of the move/collide system.
+        // The time stops right at the moment of collision, to ensure exactly 1 collision occurs.
+        let exp_collision_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_collision_y = 0.0;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[
+                Duration::from_secs_f32(5.0 / BALL_SPEED),
+                Duration::from_secs_f32((5.0 / BALL_SPEED) * 0.5),
+            ],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (1.0, -1.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x - 2.0, exp_collision_y + 1.5),
+            exp_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_barely_right() {
+        // Barely collide with corner of paddle
+        let exp_collision_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_collision_y = 0.0 + (BALL_SIZE / 4.0); // 1/4 of ball overlapping paddle edge
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y + 3.0),
+            init_dir: Dir2::from_xy(4.0, -3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (0.0, -1.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x - 2.0, exp_collision_y - 1.5),
+            exp_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_miss_barely_right() {
+        // Barely miss the edge of the paddle
+        let exp_intersect_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_intersect_y = 0.0 + (BALL_SIZE / 2.0) + 0.001;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time long enough to pass would-be collision point
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 2.0)],
+
+            // Use known 3/4/5 triangle for pre-intersection vector for simplicity
+            init_pos: Vec2::new(exp_intersect_x - 4.0, exp_intersect_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (0.0, -1.0),
+
+            // Should continue traveling past intersection point without collision
+            exp_pos: Vec2::new(exp_intersect_x + 4.0, exp_intersect_y + 3.0),
+            exp_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_top() {
+        // Solid collision with top of arena
+        let exp_collision_x = 0.0;
+        let exp_collision_y = (ARENA_HEIGHT / 2.0) - (BALL_SIZE / 2.0);
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x + 2.0, exp_collision_y - 1.5),
+            exp_dir: Dir2::from_xy(4.0, -3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_bottom() {
+        // Solid collision with bottom of arena
+        let exp_collision_x = 0.0;
+        let exp_collision_y = (-ARENA_HEIGHT / 2.0) + (BALL_SIZE / 2.0);
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time so that distance after collision is half of pre-collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y + 3.0),
+            init_dir: Dir2::from_xy(4.0, -3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x + 2.0, exp_collision_y + 1.5),
+            exp_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_paddle_wall() {
+        // Collide with p2 paddle then top wall
+        // Init point to collision1 is 3/4/5 triangle.
+        // Collision1 to collision2 is 3/4/5 triangle too.
+        let exp_collision2_y = (ARENA_HEIGHT / 2.0) - (BALL_SIZE / 2.0);
+        let exp_collision1_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_collision1_y = exp_collision2_y - 3.0;
+        let exp_collision2_x = exp_collision1_x - 4.0;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time for 2 collisions of length 5, plus 1/2 that dist after 2nd collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 2.5)],
+
+            init_pos: Vec2::new(exp_collision1_x - 4.0, exp_collision1_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (ARENA_HEIGHT / 2.0, -ARENA_HEIGHT / 2.0),
+
+            // After second collision vector should be half the distance based on time
+            exp_pos: Vec2::new(exp_collision2_x - 2.0, exp_collision2_y - 1.5),
+            exp_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_wall_paddle() {
+        // Collide with top wall, then p2 paddle
+        // Init point to collision1 is 3/4/5 triangle.
+        // Collision1 to collision2 is 3/4/5 triangle too.
+        let exp_collision1_y = (ARENA_HEIGHT / 2.0) - (BALL_SIZE / 2.0);
+        let exp_collision2_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_collision2_y = exp_collision1_y - 3.0;
+        let exp_collision1_x = exp_collision2_x - 4.0;
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time for 2 collisions of length 5, plus 1/2 that dist after 2nd collision
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 2.5)],
+
+            init_pos: Vec2::new(exp_collision1_x - 4.0, exp_collision1_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (ARENA_HEIGHT / 2.0, -ARENA_HEIGHT / 2.0),
+
+            // After second collision vector should be half the distance based on time
+            exp_pos: Vec2::new(exp_collision2_x - 2.0, exp_collision2_y - 1.5),
+            exp_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
+        });
+    }
+
+    #[test]
+    fn test_move_collide_corner() {
+        // Collide with "corner" of arena, hitting wall and paddle at exact same point
+        let exp_collision_x =
+            (ARENA_WIDTH / 2.0) - paddle::tests::get_paddle_width() - (BALL_SIZE / 2.0);
+        let exp_collision_y = (ARENA_HEIGHT / 2.0) - (BALL_SIZE / 2.0);
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+
+            // Time for 1 collision 5 units away, plus 1/2 that dist afterwards
+            time_deltas: &[Duration::from_secs_f32((5.0 / BALL_SPEED) * 1.5)],
+
+            // Use known 3/4/5 triangle for pre-collision vector for simplicity
+            init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
+            init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (ARENA_HEIGHT / 2.0, -ARENA_HEIGHT / 2.0),
+
+            // Post reflection vector should be half of pre-collision 3/4/5 triangle
+            exp_pos: Vec2::new(exp_collision_x - 2.0, exp_collision_y - 1.5),
+            exp_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
         });
     }
 
@@ -563,6 +1066,7 @@ mod tests {
             Ball {
                 movement_dir: Dir2::X,
                 paused: false,
+                curve: CurveState::default(),
             },
             Transform {
                 translation: Vec3::new(45f32, -102f32, 8f32),
@@ -603,6 +1107,7 @@ mod tests {
             Ball {
                 movement_dir: Dir2::X,
                 paused: true,
+                curve: CurveState::default(),
             },
             Transform::default(),
         ));
@@ -629,9 +1134,9 @@ mod tests {
 
     // --- Helper Types ---
 
-    struct TestMoveCollideCfg {
+    struct TestMoveCollideCfg<'a> {
         paused: bool,
-        time_delta: Duration,
+        time_deltas: &'a [Duration],
         init_pos: Vec2,
         init_dir: Dir2,
         p1_paddle_ends: (f32, f32), // Y coordinates of top and bottom
@@ -645,7 +1150,7 @@ mod tests {
     fn test_move_and_collide_helper(cfg: &TestMoveCollideCfg) {
         let mut world = World::default();
 
-        // Spawn Paddles and Ball based on Config
+        // Spawn Paddles and Ball based on Config, and add Time resource and system
         paddle::tests::spawn_test_paddle(
             &mut world,
             cfg.p1_paddle_ends.0,
@@ -662,6 +1167,7 @@ mod tests {
             Ball {
                 movement_dir: cfg.init_dir,
                 paused: cfg.paused,
+                curve: CurveState::default(),
             },
             Transform {
                 translation: cfg.init_pos.extend(0f32),
@@ -669,15 +1175,17 @@ mod tests {
                 ..default()
             },
         ));
-
-        // Set up Time resource to simulate configured time delta
-        let mut time = Time::<()>::default();
-        time.advance_by(cfg.time_delta);
-        world.insert_resource(time);
-
-        // Run the move/collision system
+        world.init_resource::<Time>();
         let move_sys = world.register_system(move_and_collide);
-        world.run_system(move_sys).unwrap();
+
+        for delta in cfg.time_deltas {
+            // Set up Time resource to simulate configured time delta
+            let mut time = world.get_resource_mut::<Time>().unwrap();
+            time.advance_by(*delta);
+
+            // Run the move/collision system
+            world.run_system(move_sys).unwrap();
+        }
 
         // Validate the new position and direction of the ball
         let mut query = world.query::<(&Ball, &Transform)>();
@@ -722,6 +1230,7 @@ mod tests {
             Ball {
                 movement_dir: Dir2::X,
                 paused: ball_paused,
+                curve: CurveState::default(),
             },
             Transform {
                 translation: Vec3::new(ball_x, 0f32, 0f32),
