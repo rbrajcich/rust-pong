@@ -177,6 +177,7 @@ pub struct StartBall;
 // Private Types
 
 // Represents a possible color (or blinking color sequence) for the ball.
+#[derive(Debug, PartialEq)]
 enum BallColor<'a> {
     Solid(Color),
     Blinking {
@@ -186,6 +187,7 @@ enum BallColor<'a> {
 }
 
 // Represents a particular curve state/configuration to apply to the ball.
+#[derive(Debug)]
 struct CurveLevelCfg<'a> {
     color: BallColor<'a>,
     rotate_rad_per_sec: f32, // Should always be positive
@@ -193,7 +195,7 @@ struct CurveLevelCfg<'a> {
 }
 
 // Represents the direction the ball is currently curving in, if any.
-#[derive(PartialEq, Eq, Default, Clone, Copy)]
+#[derive(PartialEq, Eq, Default, Clone, Copy, Debug)]
 enum CurveDir {
     #[default]
     None,
@@ -268,7 +270,11 @@ impl CurveState {
     //
     fn get_rotation_delta(&self, time_delta: Duration) -> f32 {
         let cur_state = BALL_CURVE_LEVELS.get(self.cfg_idx).unwrap();
-        cur_state.rotate_rad_per_sec * time_delta.as_secs_f32()
+        match self.dir {
+            CurveDir::Clockwise => -cur_state.rotate_rad_per_sec * time_delta.as_secs_f32(),
+            CurveDir::CounterClockwise => cur_state.rotate_rad_per_sec * time_delta.as_secs_f32(),
+            CurveDir::None => 0f32,
+        }
     }
 
     //
@@ -277,7 +283,11 @@ impl CurveState {
     //
     fn get_trajectory_delta(&self, time_delta: Duration) -> f32 {
         let cur_state = BALL_CURVE_LEVELS.get(self.cfg_idx).unwrap();
-        cur_state.curve_rad_per_sec * time_delta.as_secs_f32()
+        match self.dir {
+            CurveDir::Clockwise => -cur_state.curve_rad_per_sec * time_delta.as_secs_f32(),
+            CurveDir::CounterClockwise => cur_state.curve_rad_per_sec * time_delta.as_secs_f32(),
+            CurveDir::None => 0f32,
+        }
     }
 }
 
@@ -318,13 +328,7 @@ fn move_and_collide(
 
     if !ball.paused {
         // Update trajectory based on curve
-        let trajectory_delta = match ball.curve.dir {
-            CurveDir::Clockwise => Mat2::from_angle(-ball.curve.get_trajectory_delta(time.delta())),
-            CurveDir::CounterClockwise => {
-                Mat2::from_angle(ball.curve.get_trajectory_delta(time.delta()))
-            }
-            CurveDir::None => Mat2::IDENTITY,
-        };
+        let trajectory_delta = Mat2::from_angle(ball.curve.get_trajectory_delta(time.delta()));
         ball.movement_dir = Dir2::new(trajectory_delta * ball.movement_dir.as_vec2()).unwrap();
 
         // Move the ball along its trajectory and collide as needed
@@ -352,13 +356,8 @@ fn apply_curve_visuals(time: Res<Time>, ball_q: Single<(&mut Ball, &mut Sprite, 
     let color = ball.curve.get_color(time.delta());
     sprite.color = color;
 
-    // Update visual rotation of the ball's sprite based on current curve state
-    let rotation_delta = match ball.curve.dir {
-        CurveDir::Clockwise => -ball.curve.get_rotation_delta(time.delta()),
-        CurveDir::CounterClockwise => ball.curve.get_rotation_delta(time.delta()),
-        CurveDir::None => 0f32,
-    };
-    ball_tf.rotation *= Quat::from_rotation_z(rotation_delta);
+    // Update visual rotation of the ball's sprite
+    ball_tf.rotation *= Quat::from_rotation_z(ball.curve.get_rotation_delta(time.delta()));
 }
 
 //
@@ -646,6 +645,15 @@ mod tests {
             .custom_size
             .expect("Expected custom size of 1x1 for ball sprite");
         assert_eq!(
+            ball.curve.cfg_idx, 0,
+            "Expected ball to start with 0 as curve config index (none config)",
+        );
+        assert_eq!(
+            ball.curve.dir,
+            CurveDir::None,
+            "Expected ball to be created with CurveDir::None",
+        );
+        assert_eq!(
             size,
             Vec2::ONE,
             "Expected ball sprite to have size 1x1, got {}",
@@ -672,6 +680,8 @@ mod tests {
             time_deltas: &[Duration::from_millis(100)],
             init_pos: Vec2::ZERO,
             init_dir: Dir2::X,
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
             p1_paddle_ends: (0f32, 0f32),
             p2_paddle_ends: (0f32, 0f32),
             exp_pos: Vec2::ZERO,
@@ -695,6 +705,10 @@ mod tests {
             // Use known 3/4/5 triangle for pre-collision vector for simplicity
             init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y - 3.0),
             init_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
+
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
 
             p1_paddle_ends: (1.0, -1.0),
             p2_paddle_ends: (0.0, 0.0),
@@ -726,6 +740,10 @@ mod tests {
             init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y - 3.0),
             init_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (1.0, -1.0),
             p2_paddle_ends: (0.0, 0.0),
 
@@ -751,6 +769,10 @@ mod tests {
             // Use known 3/4/5 triangle for pre-collision vector for simplicity
             init_pos: Vec2::new(exp_collision_x + 4.0, exp_collision_y + 3.0),
             init_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
+
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
 
             p1_paddle_ends: (0.0, -1.0),
             p2_paddle_ends: (0.0, 0.0),
@@ -778,6 +800,10 @@ mod tests {
             init_pos: Vec2::new(exp_intersect_x + 4.0, exp_intersect_y - 3.0),
             init_dir: Dir2::from_xy(-4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, -1.0),
             p2_paddle_ends: (0.0, 0.0),
 
@@ -803,6 +829,10 @@ mod tests {
             // Use known 3/4/5 triangle for pre-collision vector for simplicity
             init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
+
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
 
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (1.0, -1.0),
@@ -834,6 +864,10 @@ mod tests {
             init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (1.0, -1.0),
 
@@ -859,6 +893,10 @@ mod tests {
             // Use known 3/4/5 triangle for pre-collision vector for simplicity
             init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y + 3.0),
             init_dir: Dir2::from_xy(4.0, -3.0).unwrap(),
+
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
 
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (0.0, -1.0),
@@ -886,6 +924,10 @@ mod tests {
             init_pos: Vec2::new(exp_intersect_x - 4.0, exp_intersect_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (0.0, -1.0),
 
@@ -911,6 +953,10 @@ mod tests {
             init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (0.0, 0.0),
 
@@ -935,6 +981,10 @@ mod tests {
             // Use known 3/4/5 triangle for pre-collision vector for simplicity
             init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y + 3.0),
             init_dir: Dir2::from_xy(4.0, -3.0).unwrap(),
+
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
 
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (0.0, 0.0),
@@ -965,6 +1015,10 @@ mod tests {
             init_pos: Vec2::new(exp_collision1_x - 4.0, exp_collision1_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (ARENA_HEIGHT / 2.0, -ARENA_HEIGHT / 2.0),
 
@@ -994,6 +1048,10 @@ mod tests {
             init_pos: Vec2::new(exp_collision1_x - 4.0, exp_collision1_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (ARENA_HEIGHT / 2.0, -ARENA_HEIGHT / 2.0),
 
@@ -1020,6 +1078,10 @@ mod tests {
             init_pos: Vec2::new(exp_collision_x - 4.0, exp_collision_y - 3.0),
             init_dir: Dir2::from_xy(4.0, 3.0).unwrap(),
 
+            // No curve
+            curve_dir: CurveDir::None,
+            curve_cfg_idx: 0,
+
             p1_paddle_ends: (0.0, 0.0),
             p2_paddle_ends: (ARENA_HEIGHT / 2.0, -ARENA_HEIGHT / 2.0),
 
@@ -1027,6 +1089,207 @@ mod tests {
             exp_pos: Vec2::new(exp_collision_x - 2.0, exp_collision_y - 1.5),
             exp_dir: Dir2::from_xy(-4.0, -3.0).unwrap(),
         });
+    }
+
+    #[test]
+    fn test_move_collide_with_curve() {
+        // Time to allow the ball to propagate 5 units
+        let duration_secs = 5.0 / BALL_SPEED;
+
+        // Start trajectory just above "straight right" so that after curve
+        // it will be move straight right
+        let starting_rotation = Rot2::radians(duration_secs * BALL_CURVE_CFG_L1.curve_rad_per_sec);
+
+        test_move_and_collide_helper(&TestMoveCollideCfg {
+            paused: false,
+            time_deltas: &[Duration::from_secs_f32(duration_secs)],
+            init_pos: Vec2::ZERO,
+            init_dir: Dir2::new(starting_rotation * Vec2::X).unwrap(),
+
+            // Clockwise curve back towards "straight right" trajectory
+            curve_dir: CurveDir::Clockwise,
+            curve_cfg_idx: 1,
+
+            // No paddles
+            p1_paddle_ends: (0.0, 0.0),
+            p2_paddle_ends: (0.0, 0.0),
+
+            // Expect movement straight to the right, 5 units
+            exp_pos: Vec2::new(5.0, 0.0),
+            exp_dir: Dir2::X,
+        });
+    }
+
+    #[test]
+    fn test_apply_curve_none() {
+        // Simulate a curve state that is currently a higher degree
+        let mut curve_state = CurveState {
+            dir: CurveDir::Clockwise,
+            cfg_idx: 3,
+            color_timer: Timer::default(),
+            color_idx: 0,
+        };
+
+        // Apply curve none. Validate curve afterwards
+        curve_state.apply_curve(CurveDir::None);
+        assert_eq!(
+            curve_state.dir,
+            CurveDir::None,
+            "Expected Curve direction of None after applying dir None",
+        );
+        assert_eq!(
+            curve_state.cfg_idx, 0,
+            "Expected curve config index to be back at zero after applying dir None",
+        );
+
+        // Assert that we are back to the initial color
+        let BallColor::Solid(config_color) = BALL_CURVE_CFG_NONE.color else {
+            panic!("Expected solid ball color for no curve config");
+        };
+        assert_eq!(
+            curve_state.get_color(Duration::ZERO),
+            config_color,
+            "Expected to be using the no curve configuration for color",
+        );
+
+        // Assert no changes to rotation/trajectory in this state
+        assert_eq!(
+            curve_state.get_rotation_delta(Duration::from_secs(1)),
+            0f32,
+            "Expected no rotation delta with no curve",
+        );
+        assert_eq!(
+            curve_state.get_trajectory_delta(Duration::from_secs(1)),
+            0f32,
+            "Expected no trajectory delta with no curve",
+        );
+    }
+
+    #[test]
+    fn test_apply_curve_reverse() {
+        // Simulate a curve state that is currently a higher degree
+        let mut curve_state = CurveState {
+            dir: CurveDir::Clockwise,
+            cfg_idx: 3,
+            color_timer: Timer::default(),
+            color_idx: 0,
+        };
+
+        // Apply opposite curve. Validate curve afterwards
+        curve_state.apply_curve(CurveDir::CounterClockwise);
+        assert_eq!(
+            curve_state.dir,
+            CurveDir::CounterClockwise,
+            "Expected Curve direction of CounterClockwise after applying",
+        );
+        assert_eq!(
+            curve_state.cfg_idx, 1,
+            "Expected curve config index to be 1 after reversing dir",
+        );
+
+        // Assert that we are outputting the appropriate color
+        let BallColor::Solid(config_color) = BALL_CURVE_CFG_L1.color else {
+            panic!("Expected solid ball color for L1 curve config");
+        };
+        assert_eq!(
+            curve_state.get_color(Duration::ZERO),
+            config_color,
+            "Expected to be using the L1 curve configuration for color",
+        );
+
+        // Assert correct changes to rotation/trajectory in this state
+        assert_eq!(
+            curve_state.get_rotation_delta(Duration::from_millis(500)),
+            BALL_CURVE_CFG_L1.rotate_rad_per_sec * 0.5f32,
+            "Expected appropriate rotation delta in counter clockwise direction",
+        );
+        assert_eq!(
+            curve_state.get_trajectory_delta(Duration::from_millis(500)),
+            BALL_CURVE_CFG_L1.curve_rad_per_sec * 0.5f32,
+            "Expected appropriate trajectory delta in counter clockwise direction",
+        );
+    }
+
+    #[test]
+    fn test_apply_curve_same() {
+        // Simulate a curve state that is already moving one direction
+        let mut curve_state = CurveState {
+            dir: CurveDir::Clockwise,
+            cfg_idx: 2,
+            color_timer: Timer::default(),
+            color_idx: 0,
+        };
+
+        // Apply same curve direction. Validate curve afterwards
+        curve_state.apply_curve(CurveDir::Clockwise);
+        assert_eq!(
+            curve_state.dir,
+            CurveDir::Clockwise,
+            "Expected Curve direction of Clockwise after applying",
+        );
+        assert_eq!(
+            curve_state.cfg_idx, 3,
+            "Expected curve config index to be up to 3 after applying",
+        );
+
+        // Assert that we are outputting the appropriate colors
+        let BallColor::Blinking { blink_time, colors } = BALL_CURVE_CFG_L3.color else {
+            panic!("Expected blinking ball color for L3 curve config");
+        };
+        assert_eq!(
+            curve_state.get_color(Duration::ZERO),
+            colors[0],
+            "Expected to be using the first color in the blink sequence before elapsing time",
+        );
+        assert_eq!(
+            curve_state.get_color(blink_time),
+            colors[1],
+            "Expected to be using the second color in the blink sequence after elapsing time",
+        );
+        assert_eq!(
+            curve_state.get_color(blink_time),
+            colors[0],
+            "Expected to be using the first color again after elapsing time again",
+        );
+
+        // Assert correct changes to rotation/trajectory in this state
+        assert_eq!(
+            curve_state.get_rotation_delta(Duration::from_millis(500)),
+            -BALL_CURVE_CFG_L3.rotate_rad_per_sec * 0.5f32,
+            "Expected appropriate rotation delta in clockwise direction",
+        );
+        assert_eq!(
+            curve_state.get_trajectory_delta(Duration::from_millis(500)),
+            -BALL_CURVE_CFG_L3.curve_rad_per_sec * 0.5f32,
+            "Expected appropriate trajectory delta in clockwise direction",
+        );
+    }
+
+    #[test]
+    fn test_apply_curve_cap() {
+        // Simulate a curve state that is currently in the highest degree
+        let mut curve_state = CurveState {
+            dir: CurveDir::Clockwise,
+            cfg_idx: 3,
+            color_timer: Timer::default(),
+            color_idx: 2,
+        };
+
+        // Apply same curve. Validate that the curve level is capped
+        curve_state.apply_curve(CurveDir::Clockwise);
+        assert_eq!(
+            curve_state.dir,
+            CurveDir::Clockwise,
+            "Expected Curve direction of Clockwise after applying",
+        );
+        assert_eq!(
+            curve_state.cfg_idx, 3,
+            "Expected curve config index to still be 3 after applying same dir and hitting cap",
+        );
+        assert_eq!(
+            curve_state.color_idx, 2,
+            "Expected color index to remain same after applying, since no change occurred",
+        );
     }
 
     #[test]
@@ -1066,10 +1329,15 @@ mod tests {
             Ball {
                 movement_dir: Dir2::X,
                 paused: false,
-                curve: CurveState::default(),
+                curve: CurveState {
+                    cfg_idx: 2,
+                    dir: CurveDir::Clockwise,
+                    ..default()
+                },
             },
             Transform {
                 translation: Vec3::new(45f32, -102f32, 8f32),
+                rotation: Quat::from_rotation_z(PI / 3f32),
                 ..default()
             },
         ));
@@ -1090,11 +1358,25 @@ mod tests {
         });
         assert!(ball.paused, "Expected ball to be paused after reset");
         assert_eq!(
+            ball.curve.cfg_idx, 0,
+            "Expected curve cfg_idx of 0 after Ball was reset",
+        );
+        assert_eq!(
+            ball.curve.dir,
+            CurveDir::None,
+            "Expected curve dir of None after Ball was reset",
+        );
+        assert_eq!(
             ball_tf.translation,
             Vec3::new(0f32, 0f32, 8f32),
             "Expected Ball translation of {} but got {}",
             Vec3::new(0f32, 0f32, 8f32),
             ball_tf.translation,
+        );
+        assert_eq!(
+            ball_tf.rotation,
+            Quat::IDENTITY,
+            "Expected Ball rotation to be reset to none after ball reset",
         );
     }
 
@@ -1132,17 +1414,73 @@ mod tests {
         );
     }
 
-    // --- Helper Types ---
+    #[test]
+    fn test_curve_visuals_sys() {
+        let mut world = World::default();
+
+        // Spawn the Ball with some notable components for the system to modify
+        world.spawn((
+            Ball {
+                movement_dir: Dir2::X,
+                paused: true,
+                curve: CurveState {
+                    dir: CurveDir::CounterClockwise,
+                    cfg_idx: 2,
+                    ..default()
+                },
+            },
+            Sprite::default(),
+            Transform::default(),
+        ));
+
+        // Insert time of 1 second to test rotation gets applied
+        let mut time: Time<()> = Time::default();
+        time.advance_by(Duration::from_secs_f32(0.5));
+        world.insert_resource(time);
+
+        // Run the system to update visuals on the ball
+        let visuals_sys = world.register_system(apply_curve_visuals);
+        world.run_system(visuals_sys).unwrap();
+
+        // Verify color and rotation were applied to ball based on curve cfg.
+        let mut query = world.query_filtered::<(&Sprite, &Transform), With<Ball>>();
+        let (sprite, ball_tf) = query.single(&world).unwrap();
+        assert_eq!(
+            BALL_CURVE_CFG_L2.color.unwrap_solid(),
+            sprite.color,
+            "Expected L2 curve config's color applied to sprite",
+        );
+        assert_eq!(
+            ball_tf.rotation,
+            Quat::from_rotation_z(0.5 * BALL_CURVE_CFG_L2.rotate_rad_per_sec),
+            "Expected rotation to be applied based on curve and time delta",
+        );
+    }
+
+    // --- Helper Types and Impls ---
 
     struct TestMoveCollideCfg<'a> {
         paused: bool,
         time_deltas: &'a [Duration],
         init_pos: Vec2,
         init_dir: Dir2,
+        curve_cfg_idx: usize,
+        curve_dir: CurveDir,
         p1_paddle_ends: (f32, f32), // Y coordinates of top and bottom
         p2_paddle_ends: (f32, f32), // Y coordinates of top and bottom
         exp_pos: Vec2,
         exp_dir: Dir2,
+    }
+
+    impl<'a> BallColor<'a> {
+        // Unwrap the color contained in a Solid variant.
+        // **Panics** if the BallColor is not Solid
+        fn unwrap_solid(&self) -> Color {
+            match self {
+                BallColor::Solid(color) => *color,
+                _ => panic!("Attempted to unwrap solid BallColor that was not solid"),
+            }
+        }
     }
 
     // --- Helper Functions ---
@@ -1167,7 +1505,11 @@ mod tests {
             Ball {
                 movement_dir: cfg.init_dir,
                 paused: cfg.paused,
-                curve: CurveState::default(),
+                curve: CurveState {
+                    dir: cfg.curve_dir,
+                    cfg_idx: cfg.curve_cfg_idx,
+                    ..default()
+                },
             },
             Transform {
                 translation: cfg.init_pos.extend(0f32),
