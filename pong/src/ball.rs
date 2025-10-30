@@ -11,7 +11,6 @@ use std::f32::consts::PI;
 use std::time::Duration;
 
 use bevy::prelude::*;
-use bevy::sprite::Anchor;
 use rand::Rng;
 
 use crate::common::*;
@@ -61,17 +60,17 @@ const BALL_CURVE_LEVELS: [CurveLevelCfg; 4] = [
 
 ///
 /// This plugin adds the pong ball to the screen, and implements all associated
-/// functionality. It can be interacted with via various events defined in this module's API.
+/// functionality. It can be interacted with via various messages defined in this module's API.
 /// The exposed system sets should be used to constrain ordering as needed to ensure
-/// same-frame responses between event triggers and reactionary systems.
+/// same-frame responses between message triggers and reactionary systems.
 ///
 pub struct BallPlugin;
 
 impl Plugin for BallPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<BallOffScreen>()
-            .add_event::<ResetBall>()
-            .add_event::<StartBall>()
+        app.add_message::<BallOffScreen>()
+            .add_message::<ResetBall>()
+            .add_message::<StartBall>()
             .add_systems(Startup, setup_ball.in_set(Systems::BallCreation))
             .add_systems(
                 Update,
@@ -121,56 +120,56 @@ pub enum Systems {
     BallCreation,
 
     ///
-    /// Update systems which send BallOffScreen events. To react to these events in the
+    /// Update systems which send BallOffScreen messages. To react to these messages in the
     /// same frame, the receiver should be ordered after this system set.
     ///
     BallOffScreenSndr,
 
     ///
-    /// Update systems which react to ResetBall events. To react to these events in the
+    /// Update systems which react to ResetBall messages. To react to these messages in the
     /// same frame, the sender should be ordered before this system set.
     ///
     ResetBallRcvr,
 
     ///
-    /// Update systems which react to StartBall events. To react to these events in the
+    /// Update systems which react to StartBall messages. To react to these messages in the
     /// same frame, the sender should be ordered before this system set.
     ///
     StartBallRcvr,
 }
 
 ///
-/// This event will be triggered by code in the BallPlugin to notify other modules
+/// This message will be written by code in the BallPlugin to notify other modules
 /// that the ball has reached the edge of the screen on the left or right side, without
 /// bouncing off a paddle.
 ///
-/// If a system needs to respond to this event in the same frame, it should be ordered
+/// If a system needs to react to this message in the same frame, it should be ordered
 /// before the BallOffScreenSndr SystemSet.
 ///
-#[derive(Event, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Message, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BallOffScreen {
     Left,
     Right,
 }
 
 ///
-/// This event should be triggered by another module to signal that the ball should be
+/// This message should be sent by another module to signal that the ball should be
 /// reset to its initial state. I.e. paused, and located in the middle of the screen.
 ///
-/// If the reset needs to occur in the same frame as this event gets triggered, the
-/// system generating the event should be ordered before ResetBallRcvr.
+/// If the reset needs to occur in the same frame as this message gets sent, the
+/// system generating the message should be ordered before ResetBallRcvr.
 ///
-#[derive(Event)]
+#[derive(Message)]
 pub struct ResetBall;
 
 ///
-/// This event should be triggered by another module to signal that the ball should
+/// This message should be sent by another module to signal that the ball should
 /// unpause and start moving in a random direction towards the left or right paddle.
 ///
-/// If the start needs to occur in the same frame as this event gets triggered, the
-/// system generating the event should be ordered before StartBallRcvr.
+/// If the start needs to occur in the same frame as this message is sent, the
+/// system generating the message should be ordered before StartBallRcvr.
 ///
-#[derive(Event)]
+#[derive(Message)]
 pub struct StartBall;
 
 // -------------------------------------------------------------------------------------------------
@@ -307,7 +306,6 @@ fn setup_ball(mut commands: Commands) {
         },
         Sprite {
             custom_size: Some(Vec2::ONE),
-            anchor: Anchor::Center,
             ..default()
         },
         Transform::from_scale(Vec3::new(BALL_SIZE, BALL_SIZE, 0f32)),
@@ -362,11 +360,11 @@ fn apply_curve_visuals(time: Res<Time>, ball_q: Single<(&mut Ball, &mut Sprite, 
 
 //
 // Notifies other modules that the ball has reached the edge of the screen, by
-// dispatching BallOffScreen events.
+// dispatching BallOffScreen messages.
 //
 fn detect_ball_off_screen(
     ball_q: Single<(&mut Ball, &mut Transform)>,
-    mut event_writer: EventWriter<BallOffScreen>,
+    mut messages: MessageWriter<BallOffScreen>,
 ) {
     let (ball, ball_tf) = ball_q.into_inner();
 
@@ -375,8 +373,8 @@ fn detect_ball_off_screen(
     }
 
     if ball_tf.translation.x.abs() > BALL_OFF_SCREEN_X_MAG {
-        // Ball has collided with left/right wall! Raise event
-        event_writer.write(if ball_tf.translation.x.is_sign_positive() {
+        // Ball has collided with left/right wall! Write message
+        messages.write(if ball_tf.translation.x.is_sign_positive() {
             BallOffScreen::Right
         } else {
             BallOffScreen::Left
@@ -385,15 +383,15 @@ fn detect_ball_off_screen(
 }
 
 //
-// Handles ResetBall events sent by other modules, to pause the Ball and reset it to
-// its initial state in the center of the screen.
+// Handles ResetBall messages sent by other modules, to pause the Ball and
+// reset it to its initial state in the center of the screen.
 //
 fn handle_reset_ball(
-    mut events: EventReader<ResetBall>,
+    mut messages: MessageReader<ResetBall>,
     ball_q: Single<(&mut Ball, &mut Transform)>,
 ) {
-    if !events.is_empty() {
-        events.clear();
+    if !messages.is_empty() {
+        messages.clear();
 
         let (mut ball, mut ball_tf) = ball_q.into_inner();
         ball.curve.apply_curve(CurveDir::None);
@@ -405,12 +403,12 @@ fn handle_reset_ball(
 }
 
 //
-// Handles StartBall events sent by other modules, to unpause the Ball and
+// Handles StartBall messages sent by other modules, to unpause the Ball and
 // start it moving in a random direction towards the left or right wall.
 //
-fn handle_start_ball(mut events: EventReader<StartBall>, ball_q: Single<&mut Ball>) {
-    if !events.is_empty() {
-        events.clear();
+fn handle_start_ball(mut messages: MessageReader<StartBall>, ball_q: Single<&mut Ball>) {
+    if !messages.is_empty() {
+        messages.clear();
 
         // Generate a random starting angle (w/ 50% change of each direction)
         let mut rng = rand::rng();
@@ -556,6 +554,7 @@ fn collide_once(
 mod tests {
     use super::*;
     use bevy::ecs::schedule::AnonymousSet;
+    use bevy::sprite::Anchor;
     use bevy_test_helpers::prelude::*;
     use std::time::Duration;
 
@@ -566,16 +565,16 @@ mod tests {
 
         let world = app.world();
         assert!(
-            world.is_resource_added::<Events<BallOffScreen>>(),
-            "Expected BallOffScreen events to be added by BallPlugin",
+            world.is_resource_added::<Messages<BallOffScreen>>(),
+            "Expected BallOffScreen messages to be added by BallPlugin",
         );
         assert!(
-            world.is_resource_added::<Events<StartBall>>(),
-            "Expected StartBall events to be added by BallPlugin",
+            world.is_resource_added::<Messages<StartBall>>(),
+            "Expected StartBall messages to be added by BallPlugin",
         );
         assert!(
-            world.is_resource_added::<Events<ResetBall>>(),
-            "Expected ResetBall events to be added by BallPlugin",
+            world.is_resource_added::<Messages<ResetBall>>(),
+            "Expected ResetBall messages to be added by BallPlugin",
         );
     }
 
@@ -633,8 +632,8 @@ mod tests {
         world.run_system(setup_sys).unwrap();
 
         // Validate ball created as expected
-        let mut query = world.query::<(&Ball, &Sprite, &Transform)>();
-        let (ball, sprite, ball_tf) = query.single(&world).unwrap_or_else(|err| {
+        let mut query = world.query::<(&Ball, &Sprite, &Anchor, &Transform)>();
+        let (ball, sprite, anchor, ball_tf) = query.single(&world).unwrap_or_else(|err| {
             panic!(
                 "Expected successful query for single ball. Got error {:?}",
                 err,
@@ -660,10 +659,10 @@ mod tests {
             size,
         );
         assert_eq!(
-            sprite.anchor,
-            Anchor::Center,
-            "Expected ball sprite anchored in center, got {:?}",
-            sprite.anchor
+            *anchor,
+            Anchor::CENTER,
+            "Expected ball anchored in center, got {:?}",
+            *anchor,
         );
         assert_eq!(
             ball_tf.scale,
@@ -1342,10 +1341,10 @@ mod tests {
             },
         ));
 
-        // Create event and resource containing it, for system to receive
-        let mut events = Events::<ResetBall>::default();
-        events.send(ResetBall);
-        world.insert_resource(events);
+        // Create message and resource containing it, for system to receive
+        let mut messages = Messages::<ResetBall>::default();
+        messages.write(ResetBall);
+        world.insert_resource(messages);
 
         // Run the system
         let reset_sys = world.register_system(handle_reset_ball);
@@ -1394,10 +1393,10 @@ mod tests {
             Transform::default(),
         ));
 
-        // Create event and resource containing it, for system to receive
-        let mut events = Events::<StartBall>::default();
-        events.send(StartBall);
-        world.insert_resource(events);
+        // Create message and resource containing it, for system to receive
+        let mut messages = Messages::<StartBall>::default();
+        messages.write(StartBall);
+        world.insert_resource(messages);
 
         // Run the system
         let start_sys = world.register_system(handle_start_ball);
@@ -1410,7 +1409,7 @@ mod tests {
         });
         assert!(
             !ball.paused,
-            "Expected ball to be unpaused after start event"
+            "Expected ball to be unpaused after start message"
         );
     }
 
@@ -1563,7 +1562,7 @@ mod tests {
     fn test_ball_off_screen_helper(
         ball_paused: bool,
         ball_x: f32,
-        expected_event: Option<BallOffScreen>,
+        expected_message: Option<BallOffScreen>,
     ) {
         let mut world = World::default();
 
@@ -1580,32 +1579,32 @@ mod tests {
             },
         ));
 
-        // Add the BallOffScreen event resource for the system to write to
-        world.init_resource::<Events<BallOffScreen>>();
+        // Add the BallOffScreen message resource for the system to write to
+        world.init_resource::<Messages<BallOffScreen>>();
 
         // Run the system
         let detect_sys = world.register_system(detect_ball_off_screen);
         world.run_system(detect_sys).unwrap();
 
-        // Validate if the event was generated or not
-        let events = world.get_resource::<Events<BallOffScreen>>().unwrap();
-        let mut evt_cursor = events.get_cursor();
-        let mut evt_iter = evt_cursor.read(&events);
-        if expected_event.is_none() {
+        // Validate if the message was written or not
+        let messages = world.get_resource::<Messages<BallOffScreen>>().unwrap();
+        let mut msg_cursor = messages.get_cursor();
+        let mut msg_iter = msg_cursor.read(&messages);
+        if expected_message.is_none() {
             assert!(
-                evt_iter.next().is_none(),
-                "Expected no BallOffScreen event, but got one",
+                msg_iter.next().is_none(),
+                "Expected no BallOffScreen message, but got one",
             );
         } else {
-            let received_evt = *evt_iter
+            let received_msg = *msg_iter
                 .next()
-                .expect("Expected a BallOffScreen event, but got none");
+                .expect("Expected a BallOffScreen message, but got none");
             assert_eq!(
-                received_evt,
-                expected_event.unwrap(),
-                "Expected event {:?} but got event {:?}",
-                expected_event.unwrap(),
-                received_evt,
+                received_msg,
+                expected_message.unwrap(),
+                "Expected message {:?} but got message {:?}",
+                expected_message.unwrap(),
+                received_msg,
             );
         }
     }

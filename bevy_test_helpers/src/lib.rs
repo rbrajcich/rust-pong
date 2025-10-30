@@ -48,9 +48,10 @@ pub fn validate_sys_in_plugin<P, L, S, Marker, SS>(
             type_name::<P>(),
         ))
         .graph()
-        .systems()
+        .systems
+        .iter()
         .for_each(|(_, boxed_sys, _)| {
-            if boxed_sys.name() == type_name::<S>() {
+            if boxed_sys.name().as_string() == type_name::<S>() {
                 found_system = true;
                 return;
             }

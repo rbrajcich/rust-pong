@@ -41,13 +41,13 @@ const LEFT_SIDE_CENTER_X: f32 = -RIGHT_SIDE_CENTER_X;
 /// This plugin adds all score keeping functionality to the game. Note that it
 /// does not detect score events on its own, or alter game state. It interacts
 /// with other game logic to handle such things by sending or receiving
-/// the events contained in this module.
+/// the messages contained in this module.
 ///
 /// This plugin will only work properly if the app contains a single Window
 /// and a single Camera2d entity.
 ///
 /// To ensure necessary ordering constraints are maintained, see descriptions
-/// of below Events and SystemSets.
+/// of below Messages and SystemSets.
 ///
 pub struct ScorePlugin;
 
@@ -55,9 +55,9 @@ impl Plugin for ScorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(DynamicFontsizePlugin::default())
             .insert_resource(Score::default())
-            .add_event::<PlayerScored>()
-            .add_event::<MaxScoreReached>()
-            .add_event::<ClearScores>()
+            .add_message::<PlayerScored>()
+            .add_message::<MaxScoreReached>()
+            .add_message::<ClearScores>()
             .add_systems(Startup, setup.in_set(Systems::SetupAfterCamera))
             .add_systems(
                 Update,
@@ -72,25 +72,25 @@ impl Plugin for ScorePlugin {
 }
 
 ///
-/// This event should be triggered by other code to notify the score module when
+/// This message should be written by other code to notify the score module when
 /// a player score has been detected (including the scorer's PlayerId).
 ///
-#[derive(Event, Debug, PartialEq, Eq)]
+#[derive(Message, Debug, PartialEq, Eq)]
 pub struct PlayerScored(pub PlayerId);
 
 ///
-/// This event will be triggered by the score module when a player has reached
+/// This message will be written by the score module when a player has reached
 /// the winning score and displayed the results. Other game logic should listen
-/// for this event and move to an end-of-game state as well.
+/// for this message and move to an end-of-game state as well.
 ///
-#[derive(Event)]
+#[derive(Message)]
 pub struct MaxScoreReached;
 
 ///
-/// This event should be triggered by other code to notify the score module when
+/// This message should be triggered by other code to notify the score module when
 /// it should reset the scores to 0 and reflect this on-screen.
 ///
-#[derive(Event)]
+#[derive(Message)]
 pub struct ClearScores;
 
 ///
@@ -110,22 +110,22 @@ pub enum Systems {
     SetupAfterCamera,
 
     ///
-    /// Systems handling PlayerScored events occur in this set, so it should be ordered
-    /// after any systems that write this event type if it's necessary that the
+    /// Systems handling PlayerScored messages occur in this set, so it should be ordered
+    /// after any systems that write this message type if it's necessary that the
     /// score update should be reflected in the same frame. Must be in Update.
     ///
     PlayerScoredRcvr,
 
     ///
-    /// Systems sending MaxScoreReached events occur in this set, so it should be ordered
-    /// before any systems that read this event type if its necessary that they
+    /// Systems sending MaxScoreReached messages occur in this set, so it should be ordered
+    /// before any systems that read this message type if its necessary that they
     /// react to it in the same frame. Must be in Update.
     ///
     MaxScoreReachedSndr,
 
     ///
-    /// Systems handling ClearScores events occur in this set, so it should be ordered
-    /// after any systems that write this event type if it's necessary that the
+    /// Systems handling ClearScores messages occur in this set, so it should be ordered
+    /// after any systems that write this message type if it's necessary that the
     /// score clearing should be reflected in the same frame. Must be in Update.
     ///
     ClearScoresRcvr,
@@ -177,7 +177,7 @@ fn setup(mut commands: Commands, camera_entity: Single<Entity, With<Camera2d>>) 
             render_camera: camera_entity.entity(),
         },
         Text2d::new("0"),
-        Anchor::TopCenter,
+        Anchor::TOP_CENTER,
         Transform::from_translation(Vec3::new(
             LEFT_SIDE_CENTER_X,
             SCORE_TEXT_Y,
@@ -192,7 +192,7 @@ fn setup(mut commands: Commands, camera_entity: Single<Entity, With<Camera2d>>) 
             render_camera: camera_entity.entity(),
         },
         Text2d::new("0"),
-        Anchor::TopCenter,
+        Anchor::TOP_CENTER,
         Transform::from_translation(Vec3::new(
             RIGHT_SIDE_CENTER_X,
             SCORE_TEXT_Y,
@@ -207,7 +207,7 @@ fn setup(mut commands: Commands, camera_entity: Single<Entity, With<Camera2d>>) 
             render_camera: camera_entity.entity(),
         },
         Text2d::new(P1_WIN_TEXT),
-        Anchor::TopCenter,
+        Anchor::TOP_CENTER,
         Transform::from_translation(Vec3::new(LEFT_SIDE_CENTER_X, WIN_TEXT_Y, Z_BEHIND_GAMEPLAY)),
         Visibility::Hidden,
     ));
@@ -219,7 +219,7 @@ fn setup(mut commands: Commands, camera_entity: Single<Entity, With<Camera2d>>) 
             render_camera: camera_entity.entity(),
         },
         Text2d::new(P2_WIN_TEXT),
-        Anchor::TopCenter,
+        Anchor::TOP_CENTER,
         Transform::from_translation(Vec3::new(
             RIGHT_SIDE_CENTER_X,
             WIN_TEXT_Y,
@@ -230,20 +230,20 @@ fn setup(mut commands: Commands, camera_entity: Single<Entity, With<Camera2d>>) 
 }
 
 //
-// System to handle events generated when a player has scored. This system
+// System to handle messages generated when a player has scored. This system
 // will update the score as needed (both internally and adjust entities).
 // It will also check after each score received whether or not a player has
-// won. If so, it will generate the MaxScoreReached event.
+// won. If so, it will generate the MaxScoreReached message as an output.
 //
 fn handle_player_score(
-    mut events: EventReader<PlayerScored>,
-    mut event_writer: EventWriter<MaxScoreReached>,
+    mut score_msgs: MessageReader<PlayerScored>,
+    mut max_score_msgs: MessageWriter<MaxScoreReached>,
     mut scores: ResMut<Score>,
     score_texts: Query<(&mut Text2d, &ScoreText)>,
     win_texts: Query<(&mut Visibility, &WinText)>,
 ) {
-    // Early return in case of no events
-    if events.is_empty() {
+    // Early return in case of no messages
+    if score_msgs.is_empty() {
         return;
     }
 
@@ -257,8 +257,8 @@ fn handle_player_score(
         .map(|(vis, win_text)| (win_text.0, vis.into_inner()))
         .as_per_player();
 
-    // Handle each score event (realistically only one will have happened)
-    for PlayerScored(scorer) in events.read() {
+    // Handle each score message (realistically only one will have happened)
+    for PlayerScored(scorer) in score_msgs.read() {
         // Add to score for applicable player
         match scorer {
             Player1 => {
@@ -273,11 +273,11 @@ fn handle_player_score(
 
         // Detect if either player has won
         if scores.p1 >= WINNING_SCORE {
-            event_writer.write(MaxScoreReached);
+            max_score_msgs.write(MaxScoreReached);
             *p1_win_txt = Visibility::Visible;
             break;
         } else if scores.p2 >= WINNING_SCORE {
-            event_writer.write(MaxScoreReached);
+            max_score_msgs.write(MaxScoreReached);
             *p2_win_txt = Visibility::Visible;
             break;
         }
@@ -286,13 +286,13 @@ fn handle_player_score(
 
 // System to clear scores back to 0 and return UI elements to original states
 fn clear_scores(
-    mut events: EventReader<ClearScores>,
+    mut messages: MessageReader<ClearScores>,
     mut scores: ResMut<Score>,
     score_texts: Query<&mut Text2d, With<ScoreText>>,
     win_texts: Query<&mut Visibility, With<WinText>>,
 ) {
-    if !events.is_empty() {
-        events.clear();
+    if !messages.is_empty() {
+        messages.clear();
 
         *scores = Score { p1: 0, p2: 0 };
 
@@ -325,23 +325,23 @@ mod tests {
             "Expected DynamicFontsizePlugin to be added by ScorePlugin"
         );
 
-        // Validate resources (including events) were added to the world
+        // Validate resources (including messages) were added to the world
         let world = app.world();
         assert!(
             world.is_resource_added::<Score>(),
             "Expected Score resource to be added by ScorePlugin"
         );
         assert!(
-            world.is_resource_added::<Events<PlayerScored>>(),
-            "Expected PlayerScored event to be added by ScorePlugin"
+            world.is_resource_added::<Messages<PlayerScored>>(),
+            "Expected PlayerScored messages to be added by ScorePlugin"
         );
         assert!(
-            world.is_resource_added::<Events<MaxScoreReached>>(),
-            "Expected MaxScoreReached event to be added by ScorePlugin"
+            world.is_resource_added::<Messages<MaxScoreReached>>(),
+            "Expected MaxScoreReached messages to be added by ScorePlugin"
         );
         assert!(
-            world.is_resource_added::<Events<ClearScores>>(),
-            "Expected ClearScores event to be added by ScorePlugin"
+            world.is_resource_added::<Messages<ClearScores>>(),
+            "Expected ClearScores messages to be added by ScorePlugin"
         );
     }
 
@@ -377,60 +377,60 @@ mod tests {
     }
 
     #[test]
-    fn test_event_cleanup() {
+    fn test_message_cleanup() {
         let mut app = App::new();
         let world = app.add_plugins(ScorePlugin).world_mut();
 
-        world.send_event(PlayerScored(Player1));
-        world.send_event(MaxScoreReached);
-        world.send_event(ClearScores);
+        world.write_message(PlayerScored(Player1));
+        world.write_message(MaxScoreReached);
+        world.write_message(ClearScores);
 
-        // One game loop should not wipe out event (due to double buffering)
+        // One game loop should not wipe out messages (due to double buffering)
         world.run_schedule(First);
         assert!(
             !world
-                .get_resource::<Events<PlayerScored>>()
-                .expect("Expected to find Events resource for PlayerScored")
+                .get_resource::<Messages<PlayerScored>>()
+                .expect("Expected to find Messages resource for PlayerScored")
                 .is_empty(),
-            "Expected PlayerScored event to still exist after one game loop",
+            "Expected PlayerScored message to still exist after one game loop",
         );
         assert!(
             !world
-                .get_resource::<Events<MaxScoreReached>>()
-                .expect("Expected to find Events resource for MaxScoreReached")
+                .get_resource::<Messages<MaxScoreReached>>()
+                .expect("Expected to find Message resource for MaxScoreReached")
                 .is_empty(),
-            "Expected MaxScoreReached event to still exist after one game loop",
+            "Expected MaxScoreReached message to still exist after one game loop",
         );
         assert!(
             !world
-                .get_resource::<Events<ClearScores>>()
-                .expect("Expected to find Events resource for ClearScores")
+                .get_resource::<Messages<ClearScores>>()
+                .expect("Expected to find Messages resource for ClearScores")
                 .is_empty(),
-            "Expected ClearScores event to still exist after one game loop",
+            "Expected ClearScores message to still exist after one game loop",
         );
 
-        // After second game loop, events should be cleaned up automatically
+        // After second game loop, messages should be cleaned up automatically
         world.run_schedule(First);
         assert!(
             world
-                .get_resource::<Events<PlayerScored>>()
-                .expect("Expected to find Events resource for PlayerScored")
+                .get_resource::<Messages<PlayerScored>>()
+                .expect("Expected to find Messages resource for PlayerScored")
                 .is_empty(),
-            "Expected PlayerScored event to be cleared after two game loops",
+            "Expected PlayerScored message to be cleared after two game loops",
         );
         assert!(
             world
-                .get_resource::<Events<MaxScoreReached>>()
-                .expect("Expected to find Events resource for MaxScoreReached")
+                .get_resource::<Messages<MaxScoreReached>>()
+                .expect("Expected to find Messages resource for MaxScoreReached")
                 .is_empty(),
-            "Expected MaxScoreReached event to be cleared after two game loops",
+            "Expected MaxScoreReached message to be cleared after two game loops",
         );
         assert!(
             world
-                .get_resource::<Events<ClearScores>>()
-                .expect("Expected to find Events resource for ClearScores")
+                .get_resource::<Messages<ClearScores>>()
+                .expect("Expected to find Messages resource for ClearScores")
                 .is_empty(),
-            "Expected ClearScores event to be cleared after two game loops",
+            "Expected ClearScores message to be cleared after two game loops",
         );
     }
 
@@ -515,8 +515,8 @@ mod tests {
     fn test_handle_player_score_system() {
         // Create world with necessary resources
         let mut world = World::default();
-        world.init_resource::<Events<PlayerScored>>();
-        world.init_resource::<Events<MaxScoreReached>>();
+        world.init_resource::<Messages<PlayerScored>>();
+        world.init_resource::<Messages<MaxScoreReached>>();
         world.init_resource::<Score>();
 
         // Systems we'll need for this test
@@ -533,7 +533,7 @@ mod tests {
         world.run_system(cam_create_sys).unwrap();
         world.run_system(setup_sys).unwrap();
 
-        // Run system the first time with no event. Expect no change
+        // Run system the first time with no message. Expect no change
         world.run_system(score_sys).unwrap();
         validate_scores(
             &mut world,
@@ -543,18 +543,18 @@ mod tests {
             "0",
             false,
             false,
-            "after run with no score events",
+            "after run with no score messages",
         );
         assert!(
             world
-                .get_resource::<Events<MaxScoreReached>>()
+                .get_resource::<Messages<MaxScoreReached>>()
                 .unwrap()
                 .is_empty(),
-            "Expected 0 MaxScoreReached events after run with no score events",
+            "Expected 0 MaxScoreReached messages after run with no score messages",
         );
 
-        // Run system again with a p1 score event. Expect p1 score increment
-        world.send_event(PlayerScored(Player1));
+        // Run system again with a p1 score message. Expect p1 score increment
+        world.write_message(PlayerScored(Player1));
         world.run_system(score_sys).unwrap();
         validate_scores(
             &mut world,
@@ -564,18 +564,18 @@ mod tests {
             "0",
             false,
             false,
-            "after run with p1 score event",
+            "after run with p1 score message",
         );
         assert!(
             world
-                .get_resource::<Events<MaxScoreReached>>()
+                .get_resource::<Messages<MaxScoreReached>>()
                 .unwrap()
                 .is_empty(),
-            "Expected 0 MaxScoreReached events after run with p1 score event",
+            "Expected 0 MaxScoreReached messages after run with p1 score message",
         );
 
-        // Run system again with a p2 score event. Expect p2 score increment
-        world.send_event(PlayerScored(Player2));
+        // Run system again with a p2 score message. Expect p2 score increment
+        world.write_message(PlayerScored(Player2));
         world.run_system(score_sys).unwrap();
         validate_scores(
             &mut world,
@@ -585,14 +585,14 @@ mod tests {
             "1",
             false,
             false,
-            "after run with p2 score event",
+            "after run with p2 score message",
         );
         assert!(
             world
-                .get_resource::<Events<MaxScoreReached>>()
+                .get_resource::<Messages<MaxScoreReached>>()
                 .unwrap()
                 .is_empty(),
-            "Expected 0 MaxScoreReached events after run with p2 score event",
+            "Expected 0 MaxScoreReached messages after run with p2 score message",
         );
 
         // Prime ourselves for a victory on next score, then simulate p1 win
@@ -603,7 +603,7 @@ mod tests {
             .for_each(
                 |(_, txt)| txt.into_inner().0 = "9".into(), // Prime ScoreTexts
             );
-        world.send_event(PlayerScored(Player1));
+        world.write_message(PlayerScored(Player1));
         world.run_system(score_sys).unwrap();
         validate_scores(
             &mut world,
@@ -617,14 +617,14 @@ mod tests {
         );
         assert_eq!(
             world
-                .get_resource::<Events<MaxScoreReached>>()
+                .get_resource::<Messages<MaxScoreReached>>()
                 .unwrap()
                 .len(),
             1,
-            "Expected 1 MaxScoreReached event after run with p1 winning",
+            "Expected 1 MaxScoreReached message after run with p1 winning",
         );
         world
-            .get_resource_mut::<Events<MaxScoreReached>>()
+            .get_resource_mut::<Messages<MaxScoreReached>>()
             .unwrap()
             .clear(); // Clear for next test
 
@@ -642,7 +642,7 @@ mod tests {
             .for_each(
                 |vis| *vis.into_inner() = Visibility::Hidden, // Prime WinTexts
             );
-        world.send_event(PlayerScored(Player2));
+        world.write_message(PlayerScored(Player2));
         world.run_system(score_sys).unwrap();
         validate_scores(
             &mut world,
@@ -656,11 +656,11 @@ mod tests {
         );
         assert_eq!(
             world
-                .get_resource::<Events<MaxScoreReached>>()
+                .get_resource::<Messages<MaxScoreReached>>()
                 .unwrap()
                 .len(),
             1,
-            "Expected 1 MaxScoreReached event after run with p2 winning",
+            "Expected 1 MaxScoreReached message after run with p2 winning",
         );
     }
 
@@ -668,7 +668,7 @@ mod tests {
     fn test_clear_scores_system() {
         // Create world with necessary resources
         let mut world = World::default();
-        world.init_resource::<Events<ClearScores>>();
+        world.init_resource::<Messages<ClearScores>>();
         world.init_resource::<Score>();
 
         // Systems we'll need for this test
@@ -700,7 +700,7 @@ mod tests {
                 |vis| *vis.into_inner() = Visibility::Visible, // Prime WinTexts
             );
 
-        // Now run the clear system without any event input. Nothing should happen
+        // Now run the clear system without any message input. Nothing should happen
         world.run_system(clear_sys).unwrap();
         validate_scores(
             &mut world,
@@ -710,11 +710,11 @@ mod tests {
             "10",
             true,
             true,
-            "after no clear events",
+            "after no clear messages",
         );
 
-        // And now send the event and confirm everything is wiped out
-        world.send_event(ClearScores);
+        // And now send the message and confirm everything is wiped out
+        world.write_message(ClearScores);
         world.run_system(clear_sys).unwrap();
         validate_scores(
             &mut world,
@@ -724,7 +724,7 @@ mod tests {
             "0",
             false,
             false,
-            "after sending clear event",
+            "after sending clear message",
         );
     }
 

@@ -8,9 +8,9 @@
 // Included Symbols
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::ScalingMode;
 use bevy::prelude::*;
-use bevy::render::camera::ScalingMode;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, PrimitiveTopology};
 
 use crate::common::*;
 
@@ -163,7 +163,7 @@ fn add_midline_mesh(meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
 mod tests {
     use super::*;
     use bevy::ecs::query::QuerySingleError::{MultipleEntities, NoEntities};
-    use bevy::render::mesh::VertexAttributeValues;
+    use bevy::mesh::VertexAttributeValues;
     use bevy_test_helpers::prelude::*;
 
     #[test]

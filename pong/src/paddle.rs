@@ -92,14 +92,14 @@ pub struct AllPaddleHitboxes(&'static Paddle, &'static Transform);
 /// within the world. It allows retrieval of several relevant hitbox-related values
 /// of the paddle to be used in collision detection.
 ///
-pub type PaddleHitbox<'w> = AllPaddleHitboxesItem<'w>;
+pub type PaddleHitbox<'w, 's> = AllPaddleHitboxesItem<'w, 's>;
 
-impl<'w> PaddleHitbox<'w> {
+impl<'w, 's> PaddleHitbox<'w, 's> {
     ///
     /// Given the query for all paddle hitboxes, retrieve the one specific to a
     /// particular PlayerId.
     ///
-    pub fn from_query(query: Query<'w, '_, AllPaddleHitboxes>, player: PlayerId) -> Self {
+    pub fn from_query(query: Query<'w, 's, AllPaddleHitboxes>, player: PlayerId) -> Self {
         for item in query {
             if item.0.player == player {
                 return item as PaddleHitbox;
@@ -166,9 +166,9 @@ fn setup_paddles(mut commands: Commands) {
         Sprite {
             color: Color::WHITE,
             custom_size: Some(Vec2::ONE),
-            anchor: Anchor::CenterLeft,
             ..default()
         },
+        Anchor::CENTER_LEFT,
         Transform {
             translation: Vec3 {
                 x: -ARENA_WIDTH / 2f32,
@@ -185,9 +185,9 @@ fn setup_paddles(mut commands: Commands) {
         Sprite {
             color: Color::WHITE,
             custom_size: Some(Vec2::ONE),
-            anchor: Anchor::CenterRight,
             ..default()
         },
+        Anchor::CENTER_RIGHT,
         Transform {
             translation: Vec3 {
                 x: ARENA_WIDTH / 2f32,
@@ -310,7 +310,7 @@ pub mod tests {
         );
 
         // Validate paddles are created with sensible values.
-        let mut query_state = world.query::<(&Paddle, &Sprite, &Transform)>();
+        let mut query_state = world.query::<(&Paddle, &Sprite, &Anchor, &Transform)>();
         let query = query_state.query(&world);
         assert_eq!(
             query.iter().len(),
@@ -318,7 +318,7 @@ pub mod tests {
             "Expected 2 paddles to be added by setup system",
         );
         let mut seen_pid: Option<PlayerId> = None;
-        for (&Paddle { player: pid, .. }, sprite, tf) in query {
+        for (&Paddle { player: pid, .. }, sprite, anchor, tf) in query {
             // Confirm the paddles have different PlayerId values.
             match seen_pid {
                 None => seen_pid = Some(pid),
@@ -357,10 +357,10 @@ pub mod tests {
             match pid {
                 Player1 => {
                     assert_eq!(
-                        sprite.anchor,
-                        Anchor::CenterLeft,
-                        "Expected P1 paddle anchored at CenterLeft, got {:?}",
-                        sprite.anchor,
+                        *anchor,
+                        Anchor::CENTER_LEFT,
+                        "Expected P1 paddle anchored at Center Left, got {:?}",
+                        *anchor,
                     );
                     assert_eq!(
                         tf.translation.x,
@@ -372,10 +372,10 @@ pub mod tests {
                 }
                 Player2 => {
                     assert_eq!(
-                        sprite.anchor,
-                        Anchor::CenterRight,
-                        "Expected P2 paddle anchored at CenterRight, got {:?}",
-                        sprite.anchor,
+                        *anchor,
+                        Anchor::CENTER_RIGHT,
+                        "Expected P2 paddle anchored at Center Right, got {:?}",
+                        *anchor,
                     );
                     assert_eq!(
                         tf.translation.x,

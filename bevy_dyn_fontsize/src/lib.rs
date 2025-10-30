@@ -72,17 +72,17 @@ pub struct DynamicFontSize {
 
 //
 // This resource is added as a core piece of the plugin when it is added to the app.
-// It tracks the timing of window resizing events and debounces them.
+// It tracks the timing of window resize messages and debounces them.
 //
 #[derive(Resource)]
 struct WindowResizeDebouncer {
     //
-    // The debounce timer. It will be "running" after a window resize event until
+    // The debounce timer. It will be "running" after a window resize until
     // the debounce duration has elapsed, and then trigger resizing of text entities.
     //
     timer: Timer,
 
-    // The debounce duration to use after a window resize event is detected.
+    // The debounce duration to use after a window resize is detected.
     duration: Duration,
 }
 
@@ -99,17 +99,17 @@ impl WindowResizeDebouncer {
 // Private Systems
 
 //
-// This system detects all window resize events. Any time a resize event happens, the timer
-// is started for the debounce duration. If further resize events occur before the timer
+// This system detects all window resize messages. Any time a resize happens, the timer
+// is started for the debounce duration. If further resizes occur before the timer
 // expires, it will be reset to the debounce duration again. Text resizing will not occur
-// until the debounce duration is complete without hitting any more resize events along the way.
+// until the debounce duration is complete without hitting any more resizes along the way.
 //
 fn handle_window_resize(
-    mut events: EventReader<WindowResized>,
+    mut messages: MessageReader<WindowResized>,
     mut debouncer: ResMut<WindowResizeDebouncer>,
 ) {
-    if !events.is_empty() {
-        events.clear();
+    if !messages.is_empty() {
+        messages.clear();
         debouncer.timer = Timer::new(debouncer.duration, TimerMode::Once);
     }
 }
@@ -199,10 +199,11 @@ mod tests {
         app.get_schedule(Update)
             .expect("Expected Update schedule to exist in app")
             .graph()
-            .systems()
+            .systems
+            .iter()
             .for_each(|(_, boxed_sys, _)| {
                 for exp_sys in exp_update_systems.iter_mut() {
-                    if boxed_sys.name() == exp_sys.0 {
+                    if boxed_sys.name().as_string() == exp_sys.0 {
                         assert!(
                             !exp_sys.1,
                             "Expected to find {} only once in Update, but found twice",
@@ -252,7 +253,7 @@ mod tests {
         // Register our system with the world, plus some resources it needs.
         // We simulate a partially elapsed timer in place already.
         let resize_sys = world.register_system(handle_window_resize);
-        world.init_resource::<Events<WindowResized>>();
+        world.init_resource::<Messages<WindowResized>>();
         let mut inflight_timer = Timer::new(Duration::from_secs(1), TimerMode::Once);
         inflight_timer.tick(Duration::from_millis(500));
         world.insert_resource(WindowResizeDebouncer {
@@ -260,26 +261,26 @@ mod tests {
             timer: inflight_timer.clone(),
         });
 
-        // Run the system with no events in place. Expect nothing to change
+        // Run the system with no messages in place. Expect nothing to change
         world
             .run_system(resize_sys)
             .expect("Expected resize system to run successfully");
         let debouncer = world.get_resource::<WindowResizeDebouncer>().unwrap();
         assert_eq!(
             debouncer.timer, inflight_timer,
-            "Expected no change to timer in debouncer after running sys with no events",
+            "Expected no change to timer in debouncer after running sys with no messages",
         );
 
-        // Run the system with a few events in place. Expect timer to reset
-        // and events to all be consumed by the system
-        let evt = WindowResized {
+        // Run the system with a few messages in place. Expect timer to reset
+        // and messages to all be consumed by the system
+        let msg = WindowResized {
             window: Entity::PLACEHOLDER,
             width: 1920f32,
             height: 1080f32,
         };
-        world.send_event(evt.clone());
-        world.send_event(evt.clone());
-        world.send_event(evt);
+        world.write_message(msg.clone());
+        world.write_message(msg.clone());
+        world.write_message(msg);
         world
             .run_system(resize_sys)
             .expect("Expected resize system to run successfully");
@@ -287,11 +288,11 @@ mod tests {
         assert_eq!(
             debouncer.timer,
             Timer::new(Duration::from_secs(1), TimerMode::Once),
-            "Expected timer to be reset in debouncer after running sys with events",
+            "Expected timer to be reset in debouncer after running sys with messages",
         );
 
         // Simulate timer elapsed again. Run system again and expect nothing.
-        // Last run of system should have consumed all events.
+        // Last run of system should have consumed all messages.
         debouncer.timer = inflight_timer.clone();
         world
             .run_system(resize_sys)
@@ -299,7 +300,7 @@ mod tests {
         let debouncer = world.get_resource::<WindowResizeDebouncer>().unwrap();
         assert_eq!(
             debouncer.timer, inflight_timer,
-            "Expected no change to timer in debouncer in final system run with no new events",
+            "Expected no change to timer in debouncer in final system run with no new messages",
         );
     }
 
@@ -317,7 +318,7 @@ mod tests {
         // Local copy of some configured heights, for easier access
         let height_in_world_1 = 4f32;
         let height_in_world_2 = 30f32;
-        let win_height = 200f32;
+        let win_height = 200;
         let proj_height = 20f32;
 
         // First, create and run setup system to get Entities in place and store their id's
@@ -325,7 +326,7 @@ mod tests {
             // Create a couple text elements for system to act on, plus projection
             move |mut commands: Commands| {
                 commands.spawn(Window {
-                    resolution: WindowResolution::new(0f32, 0f32), // Start with 0 scenario
+                    resolution: WindowResolution::new(0, 0), // Start with 0 scenario
                     ..default()
                 });
                 let p_ortho = commands
@@ -435,7 +436,7 @@ mod tests {
 
         // Now prime for real test. Set projection and window size to non-zero, and reset timer.
         let mut win = world.query::<&mut Window>().single_mut(&mut world).unwrap();
-        win.resolution = WindowResolution::new(500f32, win_height);
+        win.resolution = WindowResolution::new(500, win_height);
         let proj = world
             .query::<&mut Projection>()
             .get_mut(&mut world, proj)
@@ -464,12 +465,12 @@ mod tests {
         let (font, transform) = query.get(&world, txt1).unwrap();
         assert_eq!(
             font.font_size,
-            (height_in_world_1 / proj_height) * win_height,
+            (height_in_world_1 / proj_height) * win_height as f32,
             "Expected TextFont 1 to have correctly-adjusted size on third run (nominal case)",
         );
         assert_eq!(
             transform.scale.y,
-            proj_height / win_height,
+            proj_height / win_height as f32,
             "Expected Transform 1 to have correctly-adjusted height on third run (nominal case)",
         );
         assert_eq!(
@@ -481,12 +482,12 @@ mod tests {
         let (font, transform) = query.get(&world, txt2).unwrap();
         assert_eq!(
             font.font_size,
-            (height_in_world_2 / proj_height) * win_height,
+            (height_in_world_2 / proj_height) * win_height as f32,
             "Expected TextFont 2 to have correctly-adjusted size on third run (nominal case)",
         );
         assert_eq!(
             transform.scale.y,
-            proj_height / win_height,
+            proj_height / win_height as f32,
             "Expected Transform 2 to have correctly-adjusted height on third run (nominal case)",
         );
         assert_eq!(

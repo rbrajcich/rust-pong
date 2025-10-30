@@ -11,32 +11,23 @@ mod ball;
 mod common;
 mod paddle;
 mod score;
+mod window;
 
 // -------------------------------------------------------------------------------------------------
 // Included Symbols
 
 use bevy::prelude::*;
-use bevy::window::PresentMode;
-use bevy::window::WindowResolution;
 
 use arena::ArenaPlugin;
 use ball::{BallOffScreen, BallPlugin, ResetBall, StartBall};
 use common::*;
 use paddle::PaddlePlugin;
 use score::{ClearScores, MaxScoreReached, PlayerScored, ScorePlugin};
+use window::PongWindowPlugin;
 
 // -------------------------------------------------------------------------------------------------
 // Constants
 
-const PONG_WINDOW_TITLE: &str = "Rust Pong";
-const INITIAL_WINDOW_WIDTH: f32 = 1600.0;
-const INITIAL_WINDOW_HEIGHT: f32 = 900.0;
-const WINDOW_SIZE_CONSTRAINTS: WindowResizeConstraints = WindowResizeConstraints {
-    min_width: 160.0,
-    min_height: 90.0,
-    max_width: 7680.0,
-    max_height: 4320.0,
-};
 const TIME_BEFORE_FIRST_ROUND_SECS: f32 = 2.0;
 const TIME_BETWEEN_ROUNDS_SECS: f32 = 1.0;
 const TIME_BETWEEN_GAMES_SECS: f32 = 3.0;
@@ -53,42 +44,32 @@ pub struct PongPlugin;
 
 impl Plugin for PongPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: PONG_WINDOW_TITLE.to_string(),
-                resize_constraints: WINDOW_SIZE_CONSTRAINTS,
-                present_mode: PresentMode::AutoNoVsync,
-                //mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
-                resolution: WindowResolution::new(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT),
-                ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(ArenaPlugin)
-        .add_plugins(BallPlugin)
-        .add_plugins(PaddlePlugin)
-        .add_plugins(ScorePlugin)
-        .init_resource::<RoundStartTimer>()
-        .init_resource::<IsBetweenGames>()
-        .add_systems(PostStartup, start_first_round_timer)
-        .add_systems(
-            Update,
-            (
-                update_round_timer.before(score::Systems::ClearScoresRcvr),
-                handle_ball_off_screen
-                    .before(ball::Systems::ResetBallRcvr)
-                    .before(score::Systems::PlayerScoredRcvr),
-                handle_game_end,
-            ),
-        )
-        .configure_sets(
-            Startup,
-            (arena::Systems::CameraSetup.before(score::Systems::SetupAfterCamera),),
-        )
-        .configure_sets(
-            Update,
-            (ball::Systems::BallOffScreenSndr.before(handle_ball_off_screen),),
-        );
+        app.add_plugins(PongWindowPlugin)
+            .add_plugins(ArenaPlugin)
+            .add_plugins(BallPlugin)
+            .add_plugins(PaddlePlugin)
+            .add_plugins(ScorePlugin)
+            .init_resource::<RoundStartTimer>()
+            .init_resource::<IsBetweenGames>()
+            .add_systems(PostStartup, start_first_round_timer)
+            .add_systems(
+                Update,
+                (
+                    update_round_timer.before(score::Systems::ClearScoresRcvr),
+                    handle_ball_off_screen
+                        .before(ball::Systems::ResetBallRcvr)
+                        .before(score::Systems::PlayerScoredRcvr),
+                    handle_game_end,
+                ),
+            )
+            .configure_sets(
+                Startup,
+                (arena::Systems::CameraSetup.before(score::Systems::SetupAfterCamera),),
+            )
+            .configure_sets(
+                Update,
+                (ball::Systems::BallOffScreenSndr.before(handle_ball_off_screen),),
+            );
     }
 }
 
@@ -119,40 +100,40 @@ fn update_round_timer(
     time: Res<Time>,
     mut round_timer: ResMut<RoundStartTimer>,
     mut between_games: ResMut<IsBetweenGames>,
-    mut clear_score_events: EventWriter<ClearScores>,
-    mut start_ball_events: EventWriter<StartBall>,
+    mut clear_score_msgs: MessageWriter<ClearScores>,
+    mut start_ball_msgs: MessageWriter<StartBall>,
 ) {
     round_timer.0.tick(time.delta());
     if round_timer.0.just_finished() {
         // Reset for new game if needed
         if between_games.0 {
             between_games.0 = false;
-            clear_score_events.write(ClearScores);
+            clear_score_msgs.write(ClearScores);
         }
 
         // Start round
-        start_ball_events.write(StartBall);
+        start_ball_msgs.write(StartBall);
     }
 }
 
 //
-// System to handle ball off screen events from ball plugin, and trigger associated
+// System to handle ball off screen messages from ball plugin, and trigger associated
 // actions to reset the ball, increment score, and start the timer until the next round.
 //
 fn handle_ball_off_screen(
-    mut event_reader: EventReader<BallOffScreen>,
-    mut score_events: EventWriter<PlayerScored>,
-    mut reset_events: EventWriter<ResetBall>,
+    mut off_screen_msgs: MessageReader<BallOffScreen>,
+    mut score_msgs: MessageWriter<PlayerScored>,
+    mut reset_msgs: MessageWriter<ResetBall>,
     mut round_timer: ResMut<RoundStartTimer>,
 ) {
-    if let Some(event) = event_reader.read().next() {
-        score_events.write(PlayerScored(match event {
+    if let Some(off_screen_msg) = off_screen_msgs.read().next() {
+        score_msgs.write(PlayerScored(match off_screen_msg {
             BallOffScreen::Left => Player2,
             BallOffScreen::Right => Player1,
         }));
-        reset_events.write(ResetBall);
+        reset_msgs.write(ResetBall);
         round_timer.0 = Timer::from_seconds(TIME_BETWEEN_ROUNDS_SECS, TimerMode::Once);
-        event_reader.clear();
+        off_screen_msgs.clear();
     }
 }
 
@@ -161,12 +142,12 @@ fn handle_ball_off_screen(
 // Essentially just note we are between games and extend the between-round timer duration.
 //
 fn handle_game_end(
-    mut events: EventReader<MaxScoreReached>,
+    mut messages: MessageReader<MaxScoreReached>,
     mut round_timer: ResMut<RoundStartTimer>,
     mut between_games: ResMut<IsBetweenGames>,
 ) {
-    if !events.is_empty() {
-        events.clear();
+    if !messages.is_empty() {
+        messages.clear();
         between_games.0 = true;
         round_timer.0 = Timer::from_seconds(TIME_BETWEEN_GAMES_SECS, TimerMode::Once);
     }
@@ -200,7 +181,7 @@ mod tests {
             TIME_BEFORE_FIRST_ROUND_SECS,
             timer.0.remaining().as_secs_f32(),
         );
-        assert!(!timer.0.paused(), "Expected timer to be unpaused");
+        assert!(!timer.0.is_paused(), "Expected timer to be unpaused");
         assert_eq!(timer.0.mode(), TimerMode::Once, "Expected TimerMode::Once");
     }
 
@@ -251,7 +232,7 @@ mod tests {
     #[test]
     fn test_ball_off_screen_left() {
         test_ball_off_screen_sys_helper(&BallOffScreenSysHelperCfg {
-            input_events: &[BallOffScreen::Left],
+            input_messages: &[BallOffScreen::Left],
             exp_player_score: Some(PlayerScored(Player2)),
             exp_reset_ball: true,
             exp_timer_started: true,
@@ -261,7 +242,7 @@ mod tests {
     #[test]
     fn test_ball_off_screen_right() {
         test_ball_off_screen_sys_helper(&BallOffScreenSysHelperCfg {
-            input_events: &[BallOffScreen::Right],
+            input_messages: &[BallOffScreen::Right],
             exp_player_score: Some(PlayerScored(Player1)),
             exp_reset_ball: true,
             exp_timer_started: true,
@@ -271,7 +252,7 @@ mod tests {
     #[test]
     fn test_ball_off_screen_multi() {
         test_ball_off_screen_sys_helper(&BallOffScreenSysHelperCfg {
-            input_events: &[
+            input_messages: &[
                 BallOffScreen::Right,
                 BallOffScreen::Right,
                 BallOffScreen::Left,
@@ -285,7 +266,7 @@ mod tests {
     #[test]
     fn test_ball_off_screen_no_input() {
         test_ball_off_screen_sys_helper(&BallOffScreenSysHelperCfg {
-            input_events: &[],
+            input_messages: &[],
             exp_player_score: None,
             exp_reset_ball: false,
             exp_timer_started: false,
@@ -297,9 +278,9 @@ mod tests {
         let mut world = World::default();
 
         // Get our resources in place to run the system
-        let mut max_score_events = Events::<MaxScoreReached>::default();
-        max_score_events.send(MaxScoreReached);
-        world.insert_resource(max_score_events);
+        let mut max_score_messages = Messages::<MaxScoreReached>::default();
+        max_score_messages.write(MaxScoreReached);
+        world.insert_resource(max_score_messages);
         world.insert_resource(IsBetweenGames(false));
         world.init_resource::<RoundStartTimer>();
 
@@ -336,7 +317,7 @@ mod tests {
     }
 
     struct BallOffScreenSysHelperCfg<'a> {
-        input_events: &'a [BallOffScreen],
+        input_messages: &'a [BallOffScreen],
         exp_player_score: Option<PlayerScored>,
         exp_reset_ball: bool,
         exp_timer_started: bool,
@@ -356,37 +337,40 @@ mod tests {
         });
         world.insert_resource(time);
         world.insert_resource(IsBetweenGames(cfg.between_games_before));
-        world.init_resource::<Events<ClearScores>>();
-        world.init_resource::<Events<StartBall>>();
+        world.init_resource::<Messages<ClearScores>>();
+        world.init_resource::<Messages<StartBall>>();
         world.insert_resource(RoundStartTimer(Timer::from_seconds(1f32, TimerMode::Once)));
 
         // Run the system
         let update_sys = world.register_system(update_round_timer);
         world.run_system(update_sys).unwrap();
 
-        // Validate ClearScores events
-        let clear_events = world.get_resource::<Events<ClearScores>>().unwrap();
+        // Validate ClearScores messages
+        let clear_messages = world.get_resource::<Messages<ClearScores>>().unwrap();
         if cfg.exp_score_clear {
             assert!(
-                !clear_events.is_empty(),
-                "Expected a ClearScores event but got none"
+                !clear_messages.is_empty(),
+                "Expected a ClearScores message but got none"
             );
         } else {
             assert!(
-                clear_events.is_empty(),
+                clear_messages.is_empty(),
                 "Expected no ClearScores but got one"
             );
         }
 
-        // Validate StartBall events
-        let start_events = world.get_resource::<Events<StartBall>>().unwrap();
+        // Validate StartBall messages
+        let start_messages = world.get_resource::<Messages<StartBall>>().unwrap();
         if cfg.exp_start_ball {
             assert!(
-                !start_events.is_empty(),
-                "Expected one StartBall event but got none"
+                !start_messages.is_empty(),
+                "Expected one StartBall message but got none"
             );
         } else {
-            assert!(start_events.is_empty(), "Expected no StartBall but got one");
+            assert!(
+                start_messages.is_empty(),
+                "Expected no StartBall but got one"
+            );
         }
 
         // Validate IsBetweenGames state afterwards
@@ -408,54 +392,54 @@ mod tests {
         let mut world = World::default();
 
         // Get our resources in place based on the config given
-        let mut input_events = Events::<BallOffScreen>::default();
-        for input_event in cfg.input_events {
-            input_events.send(*input_event);
+        let mut input_messages = Messages::<BallOffScreen>::default();
+        for input_message in cfg.input_messages {
+            input_messages.write(*input_message);
         }
-        world.insert_resource(input_events);
-        world.init_resource::<Events<PlayerScored>>();
-        world.init_resource::<Events<ResetBall>>();
+        world.insert_resource(input_messages);
+        world.init_resource::<Messages<PlayerScored>>();
+        world.init_resource::<Messages<ResetBall>>();
         world.init_resource::<RoundStartTimer>();
 
         // Run the system
         let ball_sys = world.register_system(handle_ball_off_screen);
         world.run_system(ball_sys).unwrap();
 
-        // Validate expected PlayerScored event
-        let score_events = world.get_resource::<Events<PlayerScored>>().unwrap();
-        let mut event_cursor = score_events.get_cursor();
-        let mut event_iter = event_cursor.read(score_events);
-        if let Some(exp_score_event) = &cfg.exp_player_score {
-            let score_event = event_iter
+        // Validate expected PlayerScored message
+        let score_messages = world.get_resource::<Messages<PlayerScored>>().unwrap();
+        let mut message_cursor = score_messages.get_cursor();
+        let mut message_iter = message_cursor.read(score_messages);
+        if let Some(exp_score_message) = &cfg.exp_player_score {
+            let score_message = message_iter
                 .next()
-                .expect("Expected a PlayerScored event but got none");
+                .expect("Expected a PlayerScored message but got none");
             assert_eq!(
-                *score_event, *exp_score_event,
-                "Expected event {:?} but got {:?}",
-                *exp_score_event, *score_event,
+                *score_message, *exp_score_message,
+                "Expected message {:?} but got {:?}",
+                *exp_score_message, *score_message,
             );
             assert!(
-                event_iter.next().is_none(),
-                "Expected one PlayerScored event but got more"
+                message_iter.next().is_none(),
+                "Expected one PlayerScored message but got more"
             );
         } else {
             assert!(
-                event_iter.next().is_none(),
-                "Expected no PlayerScored events but got one"
+                message_iter.next().is_none(),
+                "Expected no PlayerScored messages but got one"
             );
         }
 
-        // Validate ResetBall events
-        let reset_events = world.get_resource_mut::<Events<ResetBall>>().unwrap();
+        // Validate ResetBall messages
+        let reset_messages = world.get_resource_mut::<Messages<ResetBall>>().unwrap();
         if cfg.exp_reset_ball {
             assert!(
-                !reset_events.is_empty(),
-                "Expected one ResetBall event but got none"
+                !reset_messages.is_empty(),
+                "Expected one ResetBall message but got none"
             );
         } else {
             assert!(
-                reset_events.is_empty(),
-                "Expected no ResetBall events but got one"
+                reset_messages.is_empty(),
+                "Expected no ResetBall messages but got one"
             );
         }
 
@@ -463,7 +447,7 @@ mod tests {
         let round_timer = world.get_resource::<RoundStartTimer>().unwrap();
         if cfg.exp_timer_started {
             assert!(
-                !round_timer.0.paused(),
+                !round_timer.0.is_paused(),
                 "Expected RoundStartTimer to be running",
             );
             assert_eq!(
