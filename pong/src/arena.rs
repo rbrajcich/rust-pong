@@ -9,8 +9,8 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::ScalingMode;
-use bevy::prelude::*;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::prelude::*;
 
 use crate::common::*;
 
